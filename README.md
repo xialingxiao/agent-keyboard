@@ -21,7 +21,9 @@ the script is served from.
 
 Add `data-summon` and the bar stays invisible to visitors: <kbd>`</kbd>/<kbd>~</kbd> summons and
 dismisses it (a triple-tap anywhere on touch screens), and <kbd>Esc</kbd> steps the open widget back
-down. Those are the only keyboard interactions, with or without `data-summon`.
+down. Those are the only keyboard interactions, with or without `data-summon`. For an owner-only bar,
+use `data-summon="signed-out"`: it shows as normal for anyone signed in to Agent Keyboard on that
+site and stays hidden (summonable the same way, to sign in) for everyone else.
 
 **[agentkeyboard.com](https://agentkeyboard.com) runs this widget on itself** (`data-site="halo"`) —
 the marketing site edits its own repo. When you see a commit here authored by `Agent Keyboard`, it was
@@ -147,6 +149,7 @@ listing any missing *required* var.
 | `AK_PUBLIC_URL` | This server's public base URL; invite emails from user provisioning land on `$AK_PUBLIC_URL/welcome`. |
 | `FLY_API_TOKEN` | App-scoped Fly deploy token (`fly tokens create deploy -a <app>`). Enables the `self-ops` skill — the agent can read its own logs/status and set secrets. |
 | `SUPABASE_ACCESS_TOKEN` | Supabase personal access token. Lets the agent manage auth config (SMTP, email templates, redirect URLs) via the Management API. |
+| `AK_FORK_REPO` | Your fork, `owner/agent-keyboard`. Enables "update yourself" from any site's bar: the agent merges upstream into the fork and pushes; CI redeploys. `GH_TOKEN` needs push access to it (boot warns if not). |
 | `EXTRA_ORIGINS` | Comma-separated extra CORS origins (deploy previews, staging). |
 | `CLAUDE_MODEL` | Default model for the CLI. Default `opus`. Per-site overrides via [harness controls](#talking-to-the-harness). |
 | `CONTEXT_WINDOW_TOKENS` | Window size for the approximate context gauge. Default `200000`. |
