@@ -10,7 +10,8 @@ import { CrepeBuilder } from '@milkdown/crepe/builder'
 import { remarkStringifyOptionsCtx } from '@milkdown/kit/core'
 import { linkSchema } from '@milkdown/kit/preset/commonmark'
 import { InputRule } from '@milkdown/kit/prose/inputrules'
-import { Plugin } from '@milkdown/kit/prose/state'
+import { liftListItem, sinkListItem } from '@milkdown/kit/prose/schema-list'
+import { Plugin, Selection } from '@milkdown/kit/prose/state'
 import { Decoration, DecorationSet, type EditorView } from '@milkdown/kit/prose/view'
 import { $inputRule, $prose } from '@milkdown/kit/utils'
 import { blockEdit } from '@milkdown/crepe/feature/block-edit'
@@ -54,6 +55,81 @@ const linkRule = $inputRule(
       return state.tr.replaceWith(start, end, state.schema.text(text!, [link.create({ href })])).removeStoredMark(link)
     }),
 )
+
+// Backspace on an empty list line: a nested one outdents (like Shift-Tab, which
+// phones don't have); otherwise the line is deleted and the caret goes to the end
+// of the line above, instead of leaving a bullet-less line inside the item above
+// (which phones' DOM handling could turn back into a numbered item, looping).
+const outdentEmpty = $prose(
+  () =>
+    new Plugin({
+      props: {
+        handleKeyDown: (view, e) => {
+          if (e.key !== 'Backspace') return false
+          const { empty, $from } = view.state.selection
+          const item = $from.node(-1)
+          if (!empty || $from.parent.content.size || item?.type.name !== 'list_item') return false
+          let d: number // depth of the node to delete
+          if ($from.index(-1)) d = $from.depth
+          else if ($from.depth >= 4 && $from.node(-3).type.name === 'list_item')
+            return liftListItem(item.type)(view.state, view.dispatch)
+          else if (item.childCount === 1 && $from.index(-2)) d = $from.depth - 1
+          else return false
+          const tr = view.state.tr.delete($from.before(d), $from.after(d))
+          view.dispatch(tr.setSelection(Selection.near(tr.doc.resolve($from.before(d)), -1)).scrollIntoView())
+          return true
+        },
+      },
+    }),
+)
+
+// Phones have no Tab: while the caret is in a list on a touch screen, indent/outdent
+// buttons float above the keyboard (the overlay is pinned to the visual viewport).
+const listIndent = (root: HTMLElement) => {
+  const bar = h('div', 'akn-indent')
+  bar.hidden = true
+  root.appendChild(bar)
+  let view: EditorView
+  const btn = (name: string, label: string, cmd: typeof liftListItem) => {
+    const b = h('button', 'akn-btn')
+    b.type = 'button'
+    b.setAttribute('aria-label', label)
+    b.title = label
+    b.appendChild(icon(name, 18))
+    // mousedown, not click: keep focus (and the keyboard) in the editor.
+    b.onmousedown = (e) => e.preventDefault()
+    b.onclick = () => {
+      cmd(view.state.schema.nodes.list_item!)(view.state, view.dispatch)
+      view.focus()
+    }
+    bar.appendChild(b)
+    return b
+  }
+  const out = btn('outdent', 'Outdent', liftListItem)
+  const ind = btn('indent', 'Indent', sinkListItem)
+  const touch = matchMedia('(pointer: coarse)')
+  const update = (v: EditorView) => {
+    view = v
+    const item = v.state.schema.nodes.list_item
+    const { $from } = v.state.selection
+    let inList = false
+    for (let d = $from.depth; d > 0; d--) if ($from.node(d).type === item) inList = true
+    bar.hidden = !(touch.matches && v.hasFocus() && inList && item)
+    if (bar.hidden) return
+    out.disabled = !liftListItem(item!)(v.state)
+    ind.disabled = !sinkListItem(item!)(v.state)
+  }
+  return $prose(
+    () =>
+      new Plugin({
+        view: (v) => {
+          view = v
+          return { update, destroy: () => bar.remove() }
+        },
+        props: { handleDOMEvents: { focus: (v) => (update(v), false), blur: (v) => (setTimeout(() => update(v)), false) } },
+      }),
+  )
+}
 
 /** remark escapes `[` in text; keep [[mentions]] readable in the saved .md. */
 const unescapeMentions = (md: string) =>
@@ -650,7 +726,7 @@ export async function open(opts: NotesOptions): Promise<void> {
       .addFeature(placeholder, { text: 'Describe the change — type / for blocks' })
     // `-` bullets (remark's default is `*`), so a note round-trips the way people write it.
     crepe.editor.config((ctx) => ctx.update(remarkStringifyOptionsCtx, (o) => ({ ...o, bullet: '-' as const })))
-    crepe.editor.use(linkRule).use(mentions())
+    crepe.editor.use(linkRule).use(outdentEmpty).use(listIndent(root)).use(mentions())
     crepe.on((l) =>
       l.markdownUpdated((_ctx, md) => {
         markdown = unescapeMentions(md)
