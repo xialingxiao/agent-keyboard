@@ -67,7 +67,7 @@ owner's site ──<script src="…/widget.js" data-site="mysite">──┐
   live and force-pushes, shows a summary with a "Publish to live" option, then calls `POST /sites/<sandbox>/publish`
   (internal secret): only the sandbox's creator or an `ALLOWED_EMAIL` owner (whoever sent the site's latest message) may.
   The server squashes the branch into one commit authored by them (`Co-authored-by` for the others), opens a PR and
-  rebase-merges it, deletes the branch, archives the notes to live's `.tmp/notes-archive/<slug>/`, notes it in the live
+  rebase-merges it, deletes the branch, archives the notes to live's `.tmp/notes-archive/<slug>/` and 3-way merges them into live's notes (`mergeNotes`, against the `.tmp/notes/.base/` snapshot taken at creation; daily notes skipped, conflicts keep live's copy and are listed in the live note), notes it in the live
   conversation, waits for live to change, redirects the bar back, and deletes the checkout once the session ends (the
   session files are kept). **M3:** the settings menu on the live site lists open sandboxes (`GET /sites/:id/sandboxes`:
   name, owner, last activity); tapping one joins it via the same handoff. A sandbox idle 12 days gets a warning note in
@@ -196,6 +196,11 @@ app you're using via its own git repo. When editing, describe the **shipped** pr
   check that no other site has a job running (`agent_keyboard_jobs` where `status='running'` and `site_id` is not this
   site, via the service key in the server env); if one is running, wait for it to finish (poll every 30 s, up to 20 min),
   then push. `site/`-only pushes don't restart the server and need no wait.
+- **Docs (Notes)** — product docs live in Notes (`.tmp/notes/`, folders in `.order.json`). **Living docs** describe how
+  the product works today; **Incremental docs** hold one PRD/tech spec per change, with a status line on top (open /
+  🟡 partly done / ✅ done + date + commit). When you implement an incremental doc, in the same job mark its status and
+  update every living doc it touches to reflect the latest implementation (and its "Last updated" date). New specs go in
+  Incremental docs, numbered in order of creation (`11 Name`, the next number after the last).
 - **Plan first** for non-trivial (3+ step) tasks; verify before marking done — prove it works, don't
   assume. Root-cause fixes, minimal impact, touch only what's necessary.
 - **Browser testing** — headless (the `browse`/dev-browser Playwright skill), never chrome MCP tools.

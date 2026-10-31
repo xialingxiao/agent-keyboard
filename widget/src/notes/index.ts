@@ -243,7 +243,8 @@ export async function open(opts: NotesOptions): Promise<void> {
 
   // -- state --
   // The sidebar: loose notes, then one level of folders. `names` is every note, flat.
-  type Item = string | { folder: string; notes: string[] }
+  // The Archive folder also remembers each archived note's previous folder ("" = loose).
+  type Item = string | { folder: string; notes: string[]; from?: Record<string, string> }
   let tree: Item[] = []
   let names: string[] = []
   const setTree = (t: Item[]) => {
@@ -253,6 +254,8 @@ export async function open(opts: NotesOptions): Promise<void> {
   const mapNotes = (fn: (n: string) => string[]) =>
     setTree(tree.flatMap((i): Item[] => (typeof i === 'string' ? fn(i) : [{ ...i, notes: i.notes.flatMap(fn) }])))
   const folderNames = () => tree.flatMap((i) => (typeof i === 'string' ? [] : [i.folder]))
+  const archive = () => tree.find((i) => typeof i !== 'string' && i.folder === ARCHIVE) as Exclude<Item, string> | undefined
+  const isArchived = (n: string) => !!archive()?.notes.includes(n)
   // Folder and note names are unique together, so a name always means one thing:
   // [[Folder]] mentions every note in it.
   const taken = (n: string) => names.includes(n) || folderNames().includes(n)
@@ -275,7 +278,7 @@ export async function open(opts: NotesOptions): Promise<void> {
       if (typeof i === 'string') noteRow(i)
       else {
         folderRow(i.folder, i.folder === renaming)
-        for (const n of i.notes) noteRow(n)
+        for (const n of i.notes) noteRow(n, i.folder === ARCHIVE)
       }
     }
     markRows()
@@ -288,7 +291,8 @@ export async function open(opts: NotesOptions): Promise<void> {
     const t: Item[] = []
     let f: { folder: string; notes: string[] } | null = null
     for (const c of list.children as HTMLCollectionOf<HTMLElement>) {
-      if (c.dataset.folder !== undefined) t.push((f = { folder: c.dataset.folder, notes: [] }))
+      if (c.dataset.folder !== undefined)
+        t.push((f = { folder: c.dataset.folder, notes: [], ...(c.dataset.folder === ARCHIVE && { from: archive()?.from }) }))
       else if (c.dataset.name !== undefined) (f ? f.notes : t).push(c.dataset.name)
     }
     return t
@@ -425,7 +429,9 @@ export async function open(opts: NotesOptions): Promise<void> {
     }
   }
 
-  const noteRow = (name: string) => {
+  // Notes archive (move into the Archive folder); archived notes are read-only
+  // and can be restored to their previous folder, or deleted.
+  const noteRow = (name: string, archived = false) => {
     const li = h('li')
     li.dataset.name = name
     const b = h('button', undefined, name)
@@ -435,11 +441,21 @@ export async function open(opts: NotesOptions): Promise<void> {
     b.onclick = () => wasDrag() || void openNote(name)
     const del = h('button', 'akn-del')
     del.type = 'button'
-    del.title = 'Delete note'
-    del.setAttribute('aria-label', `Delete note ${name}`)
-    del.append(icon('trash', 14))
-    del.onclick = () => void deleteNote(name)
-    li.append(b, del)
+    del.title = archived ? 'Delete note' : 'Archive note'
+    del.setAttribute('aria-label', `${archived ? 'Delete' : 'Archive'} note ${name}`)
+    del.append(icon(archived ? 'trash' : 'archive', 14))
+    del.onclick = () => void (archived ? deleteNote(name) : archiveNote(name))
+    li.append(b)
+    if (archived) {
+      const undo = h('button', 'akn-del akn-restore')
+      undo.type = 'button'
+      undo.title = 'Restore note'
+      undo.setAttribute('aria-label', `Restore note ${name}`)
+      undo.append(icon('undo', 14))
+      undo.onclick = () => restoreNote(name)
+      li.append(undo)
+    }
+    li.append(del)
     list.appendChild(li)
   }
 
@@ -460,6 +476,11 @@ export async function open(opts: NotesOptions): Promise<void> {
   // Esc cancels. An empty name removes the folder and keeps its notes. The
   // folder icon collapses it (open folder icon while expanded). The trash
   // removes the folder the same way: its notes move out, nothing is deleted.
+  // The Daily notes and Archive folders can't be renamed or deleted (the server
+  // always keeps them, and files new yyyy-mm-dd notes into Daily notes); they
+  // can still move. Notes in Archive can't be #mentioned in chat.
+  const DAILY = 'Daily notes'
+  const ARCHIVE = 'Archive'
   const folderRow = (folder: string, renaming: boolean) => {
     const li = h('li', 'akn-folder')
     li.dataset.folder = folder
@@ -471,7 +492,8 @@ export async function open(opts: NotesOptions): Promise<void> {
     toggle.onclick = () => toggleFolder(folder)
     const b = h('button')
     b.type = 'button'
-    b.title = 'Rename folder'
+    const fixed = folder === DAILY || folder === ARCHIVE
+    b.title = fixed ? `${folder} can't be renamed or deleted` : 'Rename folder'
     b.append(h('span', undefined, folder))
     const wasDrag = draggable(li, b)
     const edit = () => {
@@ -496,7 +518,7 @@ export async function open(opts: NotesOptions): Promise<void> {
       input.focus()
       input.select()
     }
-    b.onclick = () => wasDrag() || edit()
+    b.onclick = () => wasDrag() || fixed || edit()
     const del = h('button', 'akn-del')
     del.type = 'button'
     del.title = 'Delete folder (keeps its notes)'
@@ -505,9 +527,9 @@ export async function open(opts: NotesOptions): Promise<void> {
     del.onclick = () =>
       confirm(`Delete the folder "${folder}"? Its notes are kept and move out of it. This can't be undone.`) &&
       renameFolder(folder, '')
-    li.append(toggle, b, del)
+    li.append(toggle, b, ...(fixed ? [] : [del]))
     list.appendChild(li)
-    if (renaming) edit()
+    if (renaming && !fixed) edit()
   }
 
   const renameFolder = (from: string, to: string) => {
@@ -523,7 +545,12 @@ export async function open(opts: NotesOptions): Promise<void> {
     }
     setTree(
       to
-        ? tree.map((i) => (typeof i !== 'string' && i.folder === from ? { ...i, folder: to } : i))
+        ? tree.map((i) =>
+            typeof i === 'string' ? i
+            : i.folder === from ? { ...i, folder: to }
+            : i.from ? { ...i, from: Object.fromEntries(Object.entries(i.from).map(([n, f]) => [n, f === from ? to : f])) }
+            : i,
+          )
         : tree.flatMap((i) => (typeof i !== 'string' && i.folder === from ? i.notes : [i])),
     )
     renderList()
@@ -739,6 +766,11 @@ export async function open(opts: NotesOptions): Promise<void> {
       }),
     )
     await crepe.create()
+    if (isArchived(name)) {
+      crepe.setReadonly(true)
+      title.readOnly = true
+      by.textContent = `${by.textContent ? `${by.textContent} · ` : ''}archived, read-only`
+    }
 
     // Rename on commit (blur / Enter). The server refuses to clobber an existing note.
     const rename = async () => {
@@ -812,7 +844,6 @@ export async function open(opts: NotesOptions): Promise<void> {
 
   // Today's note (local yyyy-mm-dd), created on first tap. The server keeps the
   // Daily notes folder newest first; mirror that here so it shows right away.
-  const DAILY = 'Daily notes'
   const today = async () => {
     const d = new Date()
     const name = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
@@ -922,6 +953,42 @@ export async function open(opts: NotesOptions): Promise<void> {
   back.onclick = async () => {
     await flush()
     closeNote()
+  }
+  const archiveNote = async (name: string) => {
+    if (current === name) await flush()
+    const prev = tree.find((i) => typeof i !== 'string' && i.notes.includes(name)) as Exclude<Item, string> | undefined
+    mapNotes((n) => (n === name ? [] : [n]))
+    if (!folderNames().includes(ARCHIVE)) setTree([...tree, { folder: ARCHIVE, notes: [] }])
+    setTree(
+      tree.map((i) =>
+        typeof i !== 'string' && i.folder === ARCHIVE
+          ? { ...i, notes: [name, ...i.notes], from: { ...i.from, [name]: prev?.folder ?? '' } }
+          : i,
+      ),
+    )
+    saveOrder()
+    if (current === name) void openNote(name)
+    else renderList()
+    setStatus('Archived')
+  }
+  /** Back to the folder it was archived from (top of it), or loose if that folder is gone. */
+  const restoreNote = (name: string) => {
+    const back = archive()?.from?.[name] ?? ''
+    setTree(
+      tree.map((i) => {
+        if (typeof i === 'string') return i
+        if (i.folder === ARCHIVE) {
+          const { [name]: _, ...from } = i.from ?? {}
+          return { ...i, notes: i.notes.filter((n) => n !== name), from }
+        }
+        return i.folder === back ? { ...i, notes: [name, ...i.notes] } : i
+      }),
+    )
+    if (!names.includes(name)) setTree([name, ...tree])
+    saveOrder()
+    if (current === name) void openNote(name)
+    else renderList()
+    setStatus('Restored')
   }
   const deleteNote = async (name: string) => {
     if (!confirm(`Delete "${name}"? This can't be undone.`)) return
