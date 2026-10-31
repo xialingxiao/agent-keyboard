@@ -107,8 +107,7 @@ export function getSendEpoch(): number {
  * to idemKey, so matching keys on normalized user-turn text; positions must
  * strictly increase so repeated identical prompts pair 1:1. An attachment-only
  * turn has empty text — it may only match a history user turn that is also
- * attachment-only, never an arbitrary empty row. A reply with no user turn
- * before it matches a history reply with the same text.
+ * attachment-only, never an arbitrary empty row.
  * Returns whether anything was removed.
  */
 export function reconcileLiveTurns(history: ConversationMessage[]): boolean {
@@ -117,16 +116,6 @@ export function reconcileLiveTurns(history: ConversationMessage[]): boolean {
   let pos = 0
   for (let i = 0; i < liveTurns.length; i++) {
     const t = liveTurns[i]
-    // A reply with no user turn before it (a streaming job re-attached without its
-    // prompt) can't key on user text — match it on its own text instead.
-    if (t.role === 'assistant' && liveTurns[i - 1]?.role !== 'user') {
-      const j = history.findIndex((m, k) => k >= pos && m.role === 'assistant' && sameTerminalText(m.text, t.text))
-      if (j >= 0) {
-        drop.add(i)
-        pos = j + 1
-      }
-      continue
-    }
     if (t.role !== 'user') continue
     const target = normTurnText(t.text)
     for (let j = pos; j < history.length; j++) {
