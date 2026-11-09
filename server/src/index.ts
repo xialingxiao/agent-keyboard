@@ -39,7 +39,7 @@ import { acquireSiteLock, checkoutPath, commitFile, removeCheckout, ensureChecko
 import { stageUpload, stageFileUpload, resolveAttachments, purgeStaleUploads, outputPath } from "./photos.js";
 import { readConversation } from "./conversation.js";
 import { addTeamNote, emailMention, handleOf, markClicked, noticeUrl } from "./team.js";
-import { deleteNote, listNotes, noteMeta, noteTree, notesNote, readNote, validNoteName, validOrder, writeNote, writeOrder } from "./notes.js";
+import { NOTE_IMAGE_TYPES, deleteNote, listNotes, noteImagePath, noteMeta, noteTree, notesNote, readNote, saveNoteImage, validNoteImage, validNoteName, validOrder, writeNote, writeOrder } from "./notes.js";
 import { startJobsCron } from "./cron.js";
 import { mintRealtimeToken } from "./realtime.js";
 import { browserTasksRouter, closeAllBrowserTasks } from "./browser.js";
@@ -695,18 +695,35 @@ app.post("/sites/:siteId/publish", authed, async (req, res) => {
   try {
     const out = await publishSandbox(site, by, title.trim(), typeof summary === "string" ? summary.trim() : "");
     const live = site.sandboxOf;
-    await addTeamNote(live.id, await conversationIdFor(live.id, ""), {
-      id: randomUUID(),
-      role: "user",
-      text:
-        `Published the sandbox ${sb.branch} to live: ${title.trim()} (${out.pr})` +
-        (out.conflicts.length
-          ? `. These notes changed on both sides and kept live's copy: ${out.conflicts.join(", ")}. The sandbox's versions are in .tmp/notes-archive/${sb.id.split("--sb-")[1]}/.`
-          : ""),
-      tools: [],
-      ts: new Date().toISOString(),
-      sender: by,
-    }).catch(() => {});
+    const text =
+      `Published the sandbox ${sb.branch} to live: ${title.trim()} (${out.pr})` +
+      (out.conflicts.length
+        ? `. These notes changed on both sides and kept live's copy: ${out.conflicts.join(", ")}. The sandbox's versions are in .tmp/notes-archive/${sb.id.split("--sb-")[1]}/.`
+        : "");
+    // A real turn on live (not just a transcript note), so its agent picks the
+    // change up and answers without anyone having to nudge it.
+    const sent = process.env.AK_INTERNAL_SECRET
+      ? await fetch(`http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${live.id}/messages`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "x-ak-internal": process.env.AK_INTERNAL_SECRET },
+          body: JSON.stringify({
+            text: `${text}\n[Published] This sandbox's work is now on live. Briefly confirm it's in (check it deployed if you can) and say what changed.`,
+            page: "/",
+            sender: by,
+          }),
+        })
+          .then(async (r) => (await r.body?.cancel(), r.ok))
+          .catch(() => false)
+      : false;
+    if (!sent)
+      await addTeamNote(live.id, await conversationIdFor(live.id, ""), {
+        id: randomUUID(),
+        role: "user",
+        text,
+        tools: [],
+        ts: new Date().toISOString(),
+        sender: by,
+      }).catch(() => {});
     setSandboxRedirect(site.id, pageSlugFor(site, "/"), `https://${live.domain}/`);
     void acquireSiteLock(site.id).then((release) => removeCheckout(site.id).catch(() => {}).finally(release));
     res.json(out);
@@ -954,6 +971,41 @@ app.delete("/sites/:siteId/notes/:name", authed, async (req, res) => {
   }
   await deleteNote(site.id, name);
   res.json({ name });
+});
+
+/** Upload an image into the notes (raw body, Content-Type png/jpeg/gif/webp, ≤10 MB);
+ *  returns {path} — "images/<uuid>.<ext>", what the note's markdown keeps. */
+app.post("/sites/:siteId/notes-images", authed, express.raw({ type: () => true, limit: "10mb" }), async (req, res) => {
+  const site = getSite(req.params.siteId ?? "");
+  if (!site) {
+    res.status(404).json({ error: "unknown site" });
+    return;
+  }
+  if (denySite(req, res, site.id)) return;
+  const mime = String(req.headers["content-type"] ?? "").split(";")[0]!.trim().toLowerCase();
+  if (!NOTE_IMAGE_TYPES[mime] || !Buffer.isBuffer(req.body) || !req.body.length) {
+    res.status(400).json({ error: "send a PNG, JPEG, GIF or WebP image" });
+    return;
+  }
+  await ensureCheckout(site);
+  res.json({ path: await saveNoteImage(site.id, mime, req.body) });
+});
+
+app.get("/sites/:siteId/notes-images/:file", authed, (req, res) => {
+  const site = getSite(req.params.siteId ?? "");
+  if (!site) {
+    res.status(404).json({ error: "unknown site" });
+    return;
+  }
+  if (denySite(req, res, site.id)) return;
+  const file = req.params.file;
+  if (!validNoteImage(file) || !existsSync(noteImagePath(site.id, file))) {
+    res.status(404).json({ error: "no such image" });
+    return;
+  }
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  res.setHeader("Cache-Control", "private, max-age=31536000, immutable");
+  res.sendFile(noteImagePath(site.id, file));
 });
 
 // ─── teammate notes (an @mention in the composer; see team.ts) ───────────────
