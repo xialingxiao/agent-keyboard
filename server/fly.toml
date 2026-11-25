@@ -14,6 +14,7 @@ swap_size_mb = 512
   AK_MAX_WORKERS = '3'
   AK_PUBLIC_URL = 'https://agent-keyboard.fly.dev'
   AK_SESSION_IDLE_MS = '45000'
+  IDLE_STOP_MINUTES = '15' # the server stops itself after 15 idle minutes (no request, no job); Fly starts it on the next request (owner, 2026-11-25)
   CLAUDE_MODEL = 'opus'
   CONTEXT_WINDOW_TOKENS = '1000000'
   EMAIL_FROM = 'Agent Keyboard <invites@agentkeyboard.com>'
@@ -38,7 +39,7 @@ swap_size_mb = 512
   force_https = true
   auto_stop_machines = 'off'
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
 
 [[vm]]
   size = 'shared-cpu-2x'
