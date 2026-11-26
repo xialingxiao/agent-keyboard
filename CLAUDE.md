@@ -54,7 +54,7 @@ owner's site ──<script src="…/widget.js" data-site="mysite">──┐
   Optional per-entry fields: `sessionScope:"page"` (one conversation per page) and `guest:true` — the
   site is shared with invited people, so its agent is spawned without the owner's personal secrets
   (`PERSONAL_ENV` in `server/src/claude.ts`) and under deny rules for the personal skills, the auth
-  file, and every other site's checkout/state (`guestArgs`). `serve:true` makes the server also host the site: a GET no route matched, with Host = `domain`, serves the checkout as static files (dotfiles hidden), or, if the repo has an npm `dev` script, runs it and proxies to it (`server/src/devserver.ts`); for starter sites on a Sprite (`server/sprite-install.sh`). HyperTrack's sites (closeout, closeout-jobs) don't run here: they run on HyperTrack's own instance inside the `closeout-payroll` app (org hypertrack), served at closeout-payroll.fly.dev/ak.
+  file, and every other site's checkout/state (`guestArgs`). HyperTrack's sites (closeout, closeout-jobs) don't run here: they run on HyperTrack's own instance inside the `closeout-payroll` app (org hypertrack), served at closeout-payroll.fly.dev/ak.
   This project's own site is served with `data-site="halo"`, so the page edits its own repo.
 - **Sandboxes (M1)** — opt in per site with `sandbox:{}` in its SITES entry (previews at the default
   `https://{branch}.{domain}`, i.e. branch subdomains) or `sandbox:{"preview":"https://{branch}--mysite.netlify.app"}`
@@ -74,6 +74,11 @@ owner's site ──<script src="…/widget.js" data-site="mysite">──┐
   its conversation and is archived 2 days later unless used (`pruneSandboxes`: branch deleted, notes archived, checkout
   removed; messages then get a 410). `POST /sites/<sandbox>/archive` (internal secret + `sender`; creator or owner) archives one by hand the same way. The `sandbox` harness setting (`"off" | "offer" | "always"`) controls whether the
   agent offers one, never does, or builds every change in one. See the Sandboxes PRD note.
+- **Moving a site between instances** (spec 19, `server/src/migrate.ts`) — `GET /export-consent` (the owner signs in and
+  approves) mints a single-use 10-min token for one site; `GET /sites/:id/export` (header `x-ak-export`) streams a tar.gz of its
+  notes, memory, settings (env names only), runtime skills (owner-approved, non-guest only) and a conversation summary;
+  `POST /sites/:id/import` (internal secret) makes the new instance pull that bundle and merge it without overwriting. The
+  managed control plane drives it from the dashboard's "Bring them over".
 - **Auth** — `server/src/auth.ts`, `requireOwner()`: a Supabase JWT for the one allow-listed email.
   The widget hand-rolls GoTrue REST (no supabase-js) and stores its session under
   `localStorage['agent-keyboard-auth']`.

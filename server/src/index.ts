@@ -60,6 +60,7 @@ import {
   type JobSnapshot,
 } from "./jobs.js";
 import { writePendingResume, resumeAfterRedeploy } from "./resume.js";
+import { importFrom, mintExportToken, redeemExportToken, streamExport } from "./migrate.js";
 import {
   getJob as dbGetJob,
   listJobs as dbListJobs,
@@ -70,7 +71,6 @@ import {
 } from "./jobstore.js";
 import { openSse, startKeepalive, writeFrame } from "./sse.js";
 import { startBrowserDetection, streamScreen, withBrowserStatus } from "./screen.js";
-import { devServer, proxyDev, proxyDevUpgrade } from "./devserver.js";
 
 const SERVER_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -792,6 +792,130 @@ app.post("/sites/:siteId/archive", authed, async (req, res) => {
   res.json({ archived: sb.id });
 });
 
+// ─── moving a site's context to another instance (Notes spec 19, migrate.ts) ──
+/** The owner approves sending one site's notes, memory and settings to `return`
+ *  (the managed control plane's callback), which gets a single-use export token. */
+app.get("/export-consent", (req, res) => {
+  const js = (v: string) => JSON.stringify(v).replace(/</g, "\\u003c");
+  const site = getSite(String(req.query.site ?? ""));
+  let to: URL | null = null;
+  try {
+    to = new URL(String(req.query.return ?? ""));
+  } catch {}
+  if (!site || site.sandboxOf || !to || !(to.protocol === "https:" || to.hostname === "localhost")) {
+    res.status(400).type("text").send("This link needs ?site=<a site on this server>&return=<an https URL>.");
+    return;
+  }
+  const esc = (v: string) => v.replace(/[&<>"]/g, (c) => `&#${c.charCodeAt(0)};`);
+  res.type("html").send(`<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex"><title>Agent Keyboard — move ${esc(site.id)}</title>
+<style>
+  :root{--bg:#0a0a0a;--ink:#f5f1ea;--ink2:#b8b2a7;--ink3:#6f6a61;--rule:#211f1c;--amber:#ffb86b;--err:#f97066}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.6 ui-monospace,SFMono-Regular,Menlo,monospace}
+  main{max-width:440px;margin:16vh auto 0;padding:0 20px}
+  h1{font-size:17px;font-weight:600;margin:0 0 6px}
+  p{color:var(--ink2);margin:0 0 18px;font-size:13.5px} b{color:var(--ink)}
+  label{display:block;color:var(--ink3);font-size:11px;letter-spacing:.06em;margin:14px 0 4px}
+  input{width:100%;box-sizing:border-box;background:transparent;border:none;border-bottom:1px solid var(--rule);color:var(--ink);font:inherit;padding:6px 2px;outline:none}
+  input:focus{border-bottom-color:var(--amber)}
+  button{margin-top:22px;background:var(--amber);color:#141310;border:none;border-radius:8px;padding:10px 18px;font:600 13.5px ui-monospace,monospace;cursor:pointer}
+  button:disabled{opacity:.5;cursor:default}
+  .msg{margin-top:16px;font-size:13px;min-height:1.4em;color:var(--err)}
+</style></head>
+<body><main>
+  <h1>Move ${esc(site.id)}</h1>
+  <p>Send this site's notes, memory and settings to <b>${esc(to.host)}</b>? Secret values stay here. Only approve if you started this move.</p>
+  <form id="f">
+    <label for="em">email</label><input id="em" type="email" autocomplete="username" required>
+    <label for="pw">password</label><input id="pw" type="password" autocomplete="current-password" required>
+    <button id="go" type="submit">Sign in and approve</button>
+  </form>
+  <div class="msg" id="msg" role="alert"></div>
+<script>
+  const SB = ${js(process.env.SUPABASE_URL ?? "")}, ANON = ${js(process.env.SUPABASE_ANON_KEY ?? "")}, SITE = ${js(site.id)}, RET = ${js(to.href)};
+  const msg = (t) => (document.getElementById("msg").textContent = t);
+  const BASE = location.origin + location.pathname.replace(/\/export-consent$/, ""); // this server, even under a path prefix
+  document.getElementById("f").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const go = document.getElementById("go"); go.disabled = true; msg("");
+    try {
+      const s = await fetch(SB.replace(/\\/$/, "") + "/auth/v1/token?grant_type=password", {
+        method: "POST", headers: { apikey: ANON, "Content-Type": "application/json" },
+        body: JSON.stringify({ email: document.getElementById("em").value.trim(), password: document.getElementById("pw").value }),
+      }).then((r) => r.json());
+      if (!s.access_token) throw new Error(s.error_description || s.msg || "Wrong email or password.");
+      const r = await fetch(BASE + "/sites/" + encodeURIComponent(SITE) + "/export-token", { method: "POST", headers: { Authorization: "Bearer " + s.access_token } });
+      const out = await r.json().catch(() => ({}));
+      if (!r.ok) throw new Error(out.error || "Not allowed (" + r.status + ").");
+      const u = new URL(RET);
+      u.searchParams.set("token", out.token); u.searchParams.set("origin", BASE); u.searchParams.set("site", SITE);
+      location.href = u.href;
+    } catch (err) { msg(err.message || "Network error, try again."); go.disabled = false; }
+  });
+</script>
+</main></body></html>`);
+});
+
+/** Mint the single-use export token (the consent page, signed in as someone allowed on the site). */
+app.post("/sites/:siteId/export-token", authed, (req, res) => {
+  const site = getSite(req.params.siteId ?? "");
+  const user = authedUser(req);
+  if (!site || site.sandboxOf) {
+    res.status(404).json({ error: "unknown site" });
+    return;
+  }
+  if (denySite(req, res, site.id)) return;
+  if (!user?.email || user.id === "internal" || user.id === "relay" || user.scope?.pathPrefix || user.scope?.paths?.[site.id]) {
+    res.status(403).json({ error: "only the site's owner can move it" });
+    return;
+  }
+  res.json({ token: mintExportToken(site.id, isOwnerEmail(user.email) && !site.guest) });
+});
+
+/** The bundle (tar.gz), for the holder of an export token for this site. */
+app.get("/sites/:siteId/export", async (req, res) => {
+  const site = getSite(req.params.siteId ?? "");
+  const ok = site && redeemExportToken(req.header("x-ak-export") ?? "", site.id);
+  if (!site || !ok) {
+    res.status(401).json({ error: "export token missing, used or expired" });
+    return;
+  }
+  await streamExport(site, ok.skills, res).catch((e) => {
+    console.error("[export]", site.id, e);
+    if (!res.headersSent) res.status(500).json({ error: "export failed" });
+    else res.destroy();
+  });
+});
+
+/** Pull another instance's bundle into this site (internal secret: the control plane, before the first message). */
+app.post("/sites/:siteId/import", authed, async (req, res) => {
+  const site = getSite(req.params.siteId ?? "");
+  if (!site || site.sandboxOf) {
+    res.status(404).json({ error: "unknown site" });
+    return;
+  }
+  if (authedUser(req)?.id !== "internal") {
+    res.status(403).json({ error: "internal only" });
+    return;
+  }
+  const { origin, site: from, token, bearer } = (req.body ?? {}) as Record<string, unknown>;
+  if (typeof origin !== "string" || typeof from !== "string" || (typeof token !== "string" && typeof bearer !== "string")) {
+    res.status(400).json({ error: "origin, site and token (or bearer) required" });
+    return;
+  }
+  const release = await acquireSiteLock(site.id);
+  try {
+    await ensureCheckout(site);
+    res.json(await importFrom(site, origin, from, { token: typeof token === "string" ? token : undefined, bearer: typeof bearer === "string" ? bearer : undefined }));
+  } catch (e) {
+    const status = (e as { status?: number }).status;
+    res.status(status === 404 ? 404 : 502).json({ error: String((e as Error)?.message ?? e).slice(0, 300) });
+  } finally {
+    release();
+  }
+});
+
 /**
  * Sign-in handoff to a sandbox preview on another domain: a single-use magic-link
  * token for the caller (GoTrue admin API). The widget redirects to
@@ -1330,31 +1454,6 @@ setTimeout(() => void runChecks().then((cs) => {
 // Chromium + profile per task, never the agent's own CDP browsers.
 app.use(browserTasksRouter());
 
-// Sites this server also hosts (serve:true, e.g. a starter site on a Sprite): a
-// request no route matched serves the checkout, which every push updates; a repo
-// with an npm "dev" script runs it and is proxied to it (devserver.ts). A pruned
-// or not-yet-cloned checkout is cloned on the first request.
-const SERVED = new Map(
-  SITES.filter((s) => s.serve).map((s, i) => [s.domain, { site: s, port: 5100 + i, files: express.static(checkoutPath(s.id), { dotfiles: "ignore" }) }]),
-);
-app.use(async (req, res, next) => {
-  const served = SERVED.get(req.hostname);
-  if (!served) return next();
-  try {
-    await ensureCheckout(served.site);
-  } catch (e) {
-    return next(e);
-  }
-  const dev = devServer(served.site.id, checkoutPath(served.site.id), served.port);
-  if (dev === "starting")
-    return res
-      .status(503)
-      .set("Retry-After", "3")
-      .send('<!doctype html><meta http-equiv="refresh" content="3"><title>Starting…</title><p style="font:16px system-ui;padding:2em">Starting the site\'s dev server… this page reloads by itself.</p>');
-  if (dev) return proxyDev(req, res, dev);
-  served.files(req, res, next);
-});
-
 // ─── boot + graceful shutdown ────────────────────────────────────────────────
 const port = Number(process.env.PORT ?? 8080);
 const httpServer = app.listen(port, () => {
@@ -1443,14 +1542,6 @@ const httpServer = app.listen(port, () => {
   }
   startTailscale();
 });
-// Hot reload for a served site's dev server (its WebSocket).
-httpServer.on("upgrade", (req, socket, head) => {
-  const served = SERVED.get((req.headers.host ?? "").replace(/:\d+$/, ""));
-  const dev = served && devServer(served.site.id, checkoutPath(served.site.id), served.port);
-  if (typeof dev === "number") proxyDevUpgrade(req, socket as import("node:net").Socket, head, dev);
-  else socket.destroy();
-});
-
 // LinkedIn-only residential egress (see tailscale-up.sh): bring up the
 // userspace tailscaled + exit node in the background. Best-effort — the script
 // no-ops without TS_AUTHKEY, and a failure only means the LinkedIn browsers'
