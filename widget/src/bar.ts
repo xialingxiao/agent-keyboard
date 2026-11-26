@@ -6,8 +6,9 @@
 // reparentable composer / auth nodes. Reconciles the DOM on every store change.
 
 import { api, HttpError } from './api'
-import { getPendingInvite, getToken, login, setPasswordWithToken } from './auth'
-import { CONFIG, lsKey } from './config'
+import { getPendingInvite, getToken, login, requestRecovery, setPasswordWithToken } from './auth'
+import { CONFIG, RECOVER_URL, lsKey } from './config'
+import { isGuestDemo } from './guest-demo'
 import { clear as clearNode, el, icon, on, show } from './dom'
 import { getQueued, start } from './jobstore'
 import { attachMentions } from './mentions'
@@ -100,6 +101,7 @@ function makeComposer(onTeamNote: () => void): Composer {
   // Shown while the draft @mentions someone: off = a note in the chat only
   // (the default), on = also email them. Resets after every send.
   let notify = false
+  let canEmail = false // the server can send email (it has a sender key); learned with the teammate list
   const notifyBtn = el('button', 'ak-notify', (n) => {
     n.type = 'button'
     n.append(icon('mail', 13), 'Email them')
@@ -137,7 +139,11 @@ function makeComposer(onTeamNote: () => void): Composer {
   taWrap.append(ta)
   row.append(taWrap, cam, attach, mic, sendBtn)
   const mentions = attachMentions(ta, taWrap, () => api.listNotes(CONFIG.site).then((l) => [...new Set(l.flatMap((n) => (n.folder ? [n.name, n.folder] : [n.name])))]))
-  const people = attachMentions(ta, taWrap, () => api.teammates(CONFIG.site).then((l) => l.map((t) => t.handle)), '@', 'teammates')
+  const people = attachMentions(ta, taWrap, () => api.teammates(CONFIG.site).then((l) => {
+    canEmail = l.some((t) => t.canEmail)
+    syncSend()
+    return l.map((t) => t.handle)
+  }), '@', 'teammates')
   root.append(photos.el, row, notifyBtn, note)
   show(note, false)
   show(notifyBtn, false)
@@ -225,8 +231,8 @@ function makeComposer(onTeamNote: () => void): Composer {
   const syncSend = () => {
     sendBtn.disabled = false
     const hasMention = /(?:^|\s)@[\w.+-]/.test(ta.value) && !photos.hasAttachments()
-    if (!hasMention) notify = false
-    show(notifyBtn, hasMention)
+    if (!hasMention || !canEmail) notify = false
+    show(notifyBtn, hasMention && canEmail)
     notifyBtn.setAttribute('aria-pressed', String(notify))
   }
   on(notifyBtn, 'click', () => {
@@ -532,6 +538,11 @@ export function mountBar(shadow: ShadowRoot): void {
     el('div', 'ak-lg-rule'),
     el('div', 'ak-lg-row', (n) => n.append(lgMark(), pwInput, goBtn)),
   )
+  const forgotBtn = el('button', 'ak-lg-forgot', (n) => {
+    n.type = 'button'
+    n.textContent = 'forgot password?'
+  })
+  loginRow.append(forgotBtn)
 
   // Invite / recovery landing: finish setting a password right here (the link
   // redirected to this page with a fresh token — see auth.consumeInviteToken).
@@ -561,6 +572,37 @@ export function mountBar(shadow: ShadowRoot): void {
   // has in that slot.
   const loginFooter = el('div', 'ak-auth-footer', (n) => n.appendChild(loginRow))
   const setpwFooter = el('div', 'ak-auth-footer', (n) => n.appendChild(setpwRow))
+  // On a tour bar (agentkeyboard.com) visitors can't sign in, so the form hides
+  // behind this link; the owner taps it to get the form.
+  let ownerLogin = false
+  const ownerFooter = el('div', 'ak-owner-foot', (n) =>
+    n.appendChild(
+      el('button', 'ak-lg-forgot', (b) => {
+        b.type = 'button'
+        b.textContent = 'Owner sign-in'
+        b.onclick = () => {
+          ownerLogin = true
+          render()
+          emailInput.focus()
+        }
+      }),
+    ),
+  )
+
+  // Managed (hosted) instances: owners sign in from the dashboard's Your sites
+  // (it opens the site signed in) and teammates from their join link, so no form.
+  const managedFooter = el('div', 'ak-managed-foot', (n) =>
+    n.append(
+      el('div', 'ak-setpw-label', (d) => (d.textContent = 'Open this site again from Agent Keyboard to sign back in.')),
+      el('a', 'ak-managed-go', (a) => {
+        a.href = RECOVER_URL
+        a.target = '_blank'
+        a.rel = 'noopener'
+        a.textContent = 'Go to Agent Keyboard'
+      }),
+      el('div', 'ak-setpw-label', (d) => (d.textContent = 'Teammate? Ask the owner for a new invite link.')),
+    ),
+  )
 
   pill.append(shimmer, streamRow)
   bar.append(pill)
@@ -568,7 +610,7 @@ export function mountBar(shadow: ShadowRoot): void {
   shadow.appendChild(zone)
 
   const composer = makeComposer(() => chat.refresh())
-  stash.append(composer.el, loginFooter, setpwFooter)
+  stash.append(composer.el, loginFooter, setpwFooter, ownerFooter, managedFooter)
 
   // Back to the corner. A hidden-but-focused composer keeps :host(.ak-kbd) on after
   // the transcript closes, which strands the rectangle mid-screen — release focus
@@ -634,7 +676,13 @@ export function mountBar(shadow: ShadowRoot): void {
     goBtn.appendChild(el('div', 'ak-spin')) // signing-in spinner (was just a silent disable)
     try {
       await login(emailInput.value.trim(), pwInput.value)
-      pwInput.value = ''
+      // Safari/iOS offers "Save Password" when a filled login form leaves the page
+      // after a JS sign-in — so detach it still filled, wipe it after.
+      loginRow.remove()
+      setTimeout(() => {
+        pwInput.value = ''
+        loginFooter.appendChild(loginRow)
+      }, 500)
       chat.resetConversation() // drop stale/empty history so it reloads authed — no manual refresh
       // Still expanded: render() swaps the footer from this form to the composer.
       composer.flashConfirm('Logged in ✓') // brief amber confirmation in the prompt placeholder
@@ -652,6 +700,26 @@ export function mountBar(shadow: ShadowRoot): void {
       goBtn.disabled = false
       clearNode(goBtn)
       goBtn.appendChild(icon('arrow-right', 15)) // restore the arrow
+    }
+  })
+
+  // Forgot password: the configured recovery page (managed: the dashboard, which
+  // signs you back in through GitHub), else a Supabase reset email to this page.
+  on(forgotBtn, 'click', async () => {
+    if (RECOVER_URL) return void window.open(RECOVER_URL, '_blank', 'noopener')
+    const email = emailInput.value.trim()
+    if (!email) {
+      emailInput.placeholder = 'enter your email first'
+      emailInput.focus()
+      return
+    }
+    forgotBtn.disabled = true
+    try {
+      await requestRecovery(email)
+      forgotBtn.textContent = 'check your email for a reset link'
+    } catch (err) {
+      forgotBtn.textContent = err instanceof Error ? err.message : 'could not send the email'
+      forgotBtn.disabled = false
     }
   })
 
@@ -753,11 +821,13 @@ export function mountBar(shadow: ShadowRoot): void {
   // landing); signed in, the composer.
   const footerControl = (): HTMLElement => {
     if (getState().auth === 'authed') return composer.el
-    return getPendingInvite() ? setpwFooter : loginFooter
+    if (getPendingInvite()) return setpwFooter
+    if (RECOVER_URL) return managedFooter
+    return isGuestDemo() && !ownerLogin ? ownerFooter : loginFooter
   }
   const placeFooter = (view: View) => {
     const active = view === 'expanded' ? footerControl() : null
-    for (const node of [composer.el, loginFooter, setpwFooter]) {
+    for (const node of [composer.el, loginFooter, setpwFooter, ownerFooter, managedFooter]) {
       const target = node === active ? chat.footerEl : stash
       if (node.parentNode === target) continue
       const wasFocused = !!shadow.activeElement && node.contains(shadow.activeElement)
@@ -795,7 +865,7 @@ export function mountBar(shadow: ShadowRoot): void {
     if (job.phase === 'error') return job.message
     if (ui.voice === 'live') return 'Listening…'
     if (ui.voice === 'connecting') return 'Connecting mic…'
-    return getState().auth === 'authed' ? 'Whatsup?' : 'Log in'
+    return getState().auth === 'authed' ? 'Whatsup?' : isGuestDemo() ? 'Try it' : 'Log in'
   }
 
   const render = () => {

@@ -20,6 +20,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { v5 as uuidv5 } from "uuid";
 import { SITES, getSite, type Site } from "./sites.js";
+import { isOwnerEmail } from "./auth.js";
 import { randomUUID } from "node:crypto";
 import {
   DATA_DIR,
@@ -83,6 +84,18 @@ export const CLAUDE_HOME = process.env.HOME ?? DATA_DIR;
 
 const STATE_ROOT = join(DATA_DIR, "agent-keyboard");
 
+// Spec 16: a managed Sprite whose owner turned on "use your other sites" gets
+// ~/ak-mcp.json (the Agent Keyboard MCP; the Sprite's egress adds the token).
+// Only owners' turns load it: teammates' and cron turns spawn without it.
+export const AK_MCP = join(CLAUDE_HOME, "ak-mcp.json");
+export const mcpFor = (sender?: string, cron?: boolean): boolean =>
+  !!sender && !cron && isOwnerEmail(sender) && existsSync(AK_MCP);
+// The owner's Cloudflare token and the site's Resend key (managed Sprites, specs
+// 13/17) are dropped from teammates' turns. Not airtight: same unix user, so
+// ~/ak.env and /proc are still readable by a determined agent.
+export const OWNER_ENV = ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID", "RESEND_API_KEY"];
+export const isTeammate = (sender?: string): boolean => !!sender && !isOwnerEmail(sender);
+
 // ─── guest fence ─────────────────────────────────────────────────────────────
 // A site marked guest:true in SITES is shared with invited people. Its agent
 // runs without the owner's personal credentials (dropped from the spawn env)
@@ -112,11 +125,12 @@ export function cdpPortFor(siteId: string): number {
   return 9400 + (h % 600);
 }
 
-/** The full env the CLI is spawned with: process.env (minus personal secrets on guest sites) + harness overrides. */
-export function spawnEnv(site: Site, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
+/** The full env the CLI is spawned with: process.env (minus personal secrets on guest sites, owner secrets on teammates' turns) + harness overrides. */
+export function spawnEnv(site: Site, extra: Record<string, string> = {}, sender?: string): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, ...extra };
   for (const key of ["OPENAI_API_KEY", "ANTHROPIC_API_KEY", "CODEX_API_KEY"]) delete env[key];
   if (site.guest) for (const k of PERSONAL_ENV) delete env[k];
+  if (isTeammate(sender)) for (const k of OWNER_ENV) delete env[k];
   // Forced after harness env so every browser launched for this site is
   // discoverable on its one stable port.
   return { ...env, AK_CDP_PORT: String(cdpPortFor(site.id)) };
@@ -380,6 +394,7 @@ function streamArgs(
   usage: TurnUsage | null,
   streaming: boolean,
   cron = false,
+  mcp = false,
 ): string[] {
   return [
     ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),
@@ -402,6 +417,7 @@ function streamArgs(
     // load user-level settings/skills: ~/.claude/skills on the volume holds the
     // seeded skills (server/skills/) plus anything the agent installs itself.
     "--strict-mcp-config",
+    ...(mcp ? ["--mcp-config", AK_MCP] : []),
     "--setting-sources",
     "user,project",
     "--append-system-prompt",
@@ -916,7 +932,7 @@ export async function* runMessageJob(
       const subagents = makeSubagentTracker();
 
       const { child: c, done } = spawnClaude(
-        streamArgs(prompt, sessionId, resume, site, pushBranch, harness, lastUsage, STREAMING_INPUT, opts.cron),
+        streamArgs(prompt, sessionId, resume, site, pushBranch, harness, lastUsage, STREAMING_INPUT, opts.cron, mcpFor(opts.sender, opts.cron)),
         dir,
         (e) => {
           if (stopReason) return;
@@ -966,7 +982,7 @@ export async function* runMessageJob(
             queue.push(["status", { phase: "tool", detail: e.detail }]);
           }
         },
-        { env: spawnEnv(site, { ...harness.env, ...authorEnv(opts.sender) }), ...(STREAMING_INPUT ? { stdin: userMessageLine(prompt) } : {}) },
+        { env: spawnEnv(site, { ...harness.env, ...authorEnv(opts.sender) }, opts.sender), ...(STREAMING_INPUT ? { stdin: userMessageLine(prompt) } : {}) },
       );
       child = c;
       const settled = done.finally(() => queue.close());
@@ -1290,7 +1306,7 @@ export async function* runStreamingSession(
     const checklist = makeTaskChecklist();
     const subagents = makeSubagentTracker();
     const spawned = spawnClaude(
-      streamArgs(prompt, sessionId, resume, site, pushBranch, harness, lastUsage, true, opts.cron),
+      streamArgs(prompt, sessionId, resume, site, pushBranch, harness, lastUsage, true, opts.cron, mcpFor(opts.sender, opts.cron)),
       dir,
       (e) => {
         if (stopReason) return;
@@ -1337,7 +1353,7 @@ export async function* runStreamingSession(
           onResult(e.result);
         }
       },
-      { env: spawnEnv(site, { ...harness.env, ...authorEnv(opts.sender) }), stdin: userMessageLine(prompt), keepStdinOpen: true },
+      { env: spawnEnv(site, { ...harness.env, ...authorEnv(opts.sender) }, opts.sender), stdin: userMessageLine(prompt), keepStdinOpen: true },
     );
     child = spawned.child;
     closeInput = spawned.closeInput;

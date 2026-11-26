@@ -34,7 +34,7 @@ import {
 import { ASSET_TYPES, registerFeedRoutes } from "./feed.js";
 import { getSite, listSitesPublic, pageSlugFor, SITES } from "./sites.js";
 import { archiveSandbox, closedReason, createSandbox, getSandbox, listSandboxes, pruneSandboxes, publishSandbox, sandboxForOrigin, setSandboxRedirect, waitForPreview } from "./sandboxes.js";
-import { buildPrompt, runMessageJob, runStreamingSession, InputChannel, STREAMING_SESSION, killAllChildren, rotateConversation, conversationIdFor, sessionIdFor, sessionFileExists, compactSession } from "./claude.js";
+import { buildPrompt, mcpFor, isTeammate, runMessageJob, runStreamingSession, InputChannel, STREAMING_SESSION, killAllChildren, rotateConversation, conversationIdFor, sessionIdFor, sessionFileExists, compactSession } from "./claude.js";
 import { acquireSiteLock, checkoutPath, commitFile, removeCheckout, ensureCheckout, resetCheckoutToOrigin, startCheckoutPruning, tryAcquireSiteLock } from "./checkouts.js";
 import { stageUpload, stageFileUpload, resolveAttachments, purgeStaleUploads, outputPath } from "./photos.js";
 import { readConversation } from "./conversation.js";
@@ -70,6 +70,7 @@ import {
 } from "./jobstore.js";
 import { openSse, startKeepalive, writeFrame } from "./sse.js";
 import { startBrowserDetection, streamScreen, withBrowserStatus } from "./screen.js";
+import { devServer, proxyDev, proxyDevUpgrade } from "./devserver.js";
 
 const SERVER_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
 
@@ -232,7 +233,8 @@ function widgetJs(): Buffer | null {
       "__AK_PAGE_SCOPED_SITES__",
       SITES.filter((s) => s.sessionScope === "page").map((s) => s.id).join(","),
     )
-    .replaceAll("__AK_AGENT_TAGS__", AGENT_TAGS);
+    .replaceAll("__AK_AGENT_TAGS__", AGENT_TAGS)
+    .replaceAll("__AK_RECOVER_URL__", process.env.AK_RECOVER_URL ?? "");
   const buf = Buffer.from(src, "utf8");
   if (process.env.NODE_ENV === "production") widgetJsCache = buf;
   return buf;
@@ -620,6 +622,8 @@ app.post("/sites/:siteId/messages", authed, async (req, res) => {
     priority,
     streaming: !!input,
     input,
+    mcp: mcpFor(sender, cron),
+    teammate: isTeammate(sender),
     conversationId,
     sessionId,
     resumeCount: 0,
@@ -833,7 +837,10 @@ app.post("/sites/:siteId/jobs/:jobId/messages", authed, async (req, res) => {
   // The job must belong to the site in the URL — otherwise the site check
   // above could be sidestepped by posting another site's jobId under this one.
   const target = getJob(req.params.jobId ?? "");
-  if (!target || target.siteId !== site.id) {
+  // A session spawned with the Agent Keyboard MCP (an owner's turn) never takes a
+  // teammate's message, nor the reverse; same for one spawned with the owner's
+  // secrets (OWNER_ENV). The bar queues it for a fresh session.
+  if (!target || target.siteId !== site.id || target.mcp !== mcpFor(authedUser(req)?.email) || !!target.teammate !== isTeammate(authedUser(req)?.email)) {
     res.status(409).json({ error: "job not accepting messages" });
     return;
   }
@@ -1050,7 +1057,7 @@ app.get("/sites/:siteId/teammates", authed, async (req, res) => {
     return;
   }
   if (denySite(req, res, site.id)) return;
-  res.json((await siteMembers(site.id)).map((email) => ({ email, handle: handleOf(email) })));
+  res.json((await siteMembers(site.id)).map((email) => ({ email, handle: handleOf(email), canEmail: !!process.env.RESEND_API_KEY })));
 });
 
 /** Leave a note for the people (you included) @mentioned in `text`: saved to the transcript,
@@ -1323,9 +1330,34 @@ setTimeout(() => void runChecks().then((cs) => {
 // Chromium + profile per task, never the agent's own CDP browsers.
 app.use(browserTasksRouter());
 
+// Sites this server also hosts (serve:true, e.g. a starter site on a Sprite): a
+// request no route matched serves the checkout, which every push updates; a repo
+// with an npm "dev" script runs it and is proxied to it (devserver.ts). A pruned
+// or not-yet-cloned checkout is cloned on the first request.
+const SERVED = new Map(
+  SITES.filter((s) => s.serve).map((s, i) => [s.domain, { site: s, port: 5100 + i, files: express.static(checkoutPath(s.id), { dotfiles: "ignore" }) }]),
+);
+app.use(async (req, res, next) => {
+  const served = SERVED.get(req.hostname);
+  if (!served) return next();
+  try {
+    await ensureCheckout(served.site);
+  } catch (e) {
+    return next(e);
+  }
+  const dev = devServer(served.site.id, checkoutPath(served.site.id), served.port);
+  if (dev === "starting")
+    return res
+      .status(503)
+      .set("Retry-After", "3")
+      .send('<!doctype html><meta http-equiv="refresh" content="3"><title>Starting…</title><p style="font:16px system-ui;padding:2em">Starting the site\'s dev server… this page reloads by itself.</p>');
+  if (dev) return proxyDev(req, res, dev);
+  served.files(req, res, next);
+});
+
 // ─── boot + graceful shutdown ────────────────────────────────────────────────
 const port = Number(process.env.PORT ?? 8080);
-app.listen(port, () => {
+const httpServer = app.listen(port, () => {
   console.log(`agent-keyboard listening on :${port}`);
   startBrowserDetection(
     () => listActive().filter((job) => job.status === "running").map((job) => job.site_id),
@@ -1410,6 +1442,13 @@ app.listen(port, () => {
     console.log(`agent-keyboard: AK_FORK_REPO unset — "update yourself" is off; set it to your fork (owner/agent-keyboard) to enable it`);
   }
   startTailscale();
+});
+// Hot reload for a served site's dev server (its WebSocket).
+httpServer.on("upgrade", (req, socket, head) => {
+  const served = SERVED.get((req.headers.host ?? "").replace(/:\d+$/, ""));
+  const dev = served && devServer(served.site.id, checkoutPath(served.site.id), served.port);
+  if (typeof dev === "number") proxyDevUpgrade(req, socket as import("node:net").Socket, head, dev);
+  else socket.destroy();
 });
 
 // LinkedIn-only residential egress (see tailscale-up.sh): bring up the

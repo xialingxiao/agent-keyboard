@@ -225,6 +225,12 @@ button::-moz-focus-inner{ border:0; }
 .ak-lg-row:focus-within .ak-lg-mark{ color:var(--ak-accent); }
 .ak-login.error .ak-lg-mark{ color:var(--ak-err); }
 .ak-lg-rule{ height:1px; background:var(--ak-rule); }
+.ak-lg-forgot{
+  align-self:flex-end; margin-top:2px; padding:2px 0; border:none; background:none; cursor:pointer;
+  font-family:var(--ak-mono); font-size:11px; color:var(--ak-ink3);
+}
+.ak-lg-forgot:hover, .ak-lg-forgot:focus-visible{ color:var(--ak-accent); }
+.ak-lg-forgot:disabled{ cursor:default; color:var(--ak-ink2); }
 .ak-setpw-label{ font-family:var(--ak-mono); font-size:11.5px; line-height:1.4; color:var(--ak-ink2); padding:4px 0; }
 .ak-login.error .ak-setpw-label{ color:var(--ak-err); }
 .ak-login input{
@@ -247,6 +253,13 @@ button::-moz-focus-inner{ border:0; }
   background:color-mix(in srgb,var(--ak-bg) 96%,transparent);
   border:1px solid var(--ak-line); border-radius:8px; padding:4px 10px;
 }
+.ak-owner-foot{ display:flex; justify-content:flex-end; }
+.ak-managed-foot{ display:flex; flex-direction:column; align-items:center; gap:6px; padding:8px 0; text-align:center; }
+.ak-managed-go{
+  padding:9px 16px; border-radius:999px; text-decoration:none; transition:color .2s ease, border-color .2s ease;
+  font-family:var(--ak-mono); font-size:13px; color:var(--ak-ink); border:1px solid var(--ak-line);
+}
+.ak-managed-go:hover, .ak-managed-go:focus-visible{ color:var(--ak-accent); border-color:var(--ak-accent); }
 .ak-ov-foot > .ak-auth-footer{ box-shadow:none; background:transparent; }
 
 /* ---- composer (Claude Code terminal input box) ---- */

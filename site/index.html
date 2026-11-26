@@ -13,14 +13,14 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black" />
 <meta name="apple-mobile-web-app-title" content="Agent Keyboard" />
 <title>Agent Keyboard — Change your app by talking to it</title>
-<meta name="description" content="One script tag on your app. Ask for a change — typed, dictated, or photographed — and your own server runs a real Claude Code session that edits your codebase and commits it, right where you're looking. Open source, self-hosted, your keys, MIT." />
+<meta name="description" content="One script tag on your app. Ask for a change — typed, dictated, or photographed — and your own server runs a real Claude Code session that edits your codebase and commits it, right where you're looking. Open source, runs on your own accounts, your keys, MIT." />
 
 <link rel="icon" type="image/png" sizes="64x64" href="/favicon.png?v=5" />
 <link rel="apple-touch-icon" href="/apple-touch-icon.png?v=6" />
 
 <meta property="og:type" content="website" />
 <meta property="og:title" content="Agent Keyboard" />
-<meta property="og:description" content="Ask for a change, right where you're looking. A real Claude Code session edits your codebase and commits it. Open source, self-hosted, your keys, MIT." />
+<meta property="og:description" content="Ask for a change, right where you're looking. A real Claude Code session edits your codebase and commits it. Open source, runs on your own accounts, your keys, MIT." />
 <meta property="og:url" content="https://agentkeyboard.com/" />
 <meta property="og:image" content="https://agentkeyboard.com/og-twitter-card.jpg?v=5" />
 <meta property="og:image:secure_url" content="https://agentkeyboard.com/og-twitter-card.jpg?v=5" />
@@ -30,7 +30,7 @@
 <meta property="og:image:alt" content="Agent Keyboard prompt bar editing a live app" />
 <meta name="twitter:card" content="summary_large_image" />
 <meta name="twitter:title" content="Agent Keyboard" />
-<meta name="twitter:description" content="Ask for a change, right where you're looking. A real Claude Code session edits your codebase and commits it. Open source, self-hosted, your keys, MIT." />
+<meta name="twitter:description" content="Ask for a change, right where you're looking. A real Claude Code session edits your codebase and commits it. Open source, runs on your own accounts, your keys, MIT." />
 <meta name="twitter:image" content="https://agentkeyboard.com/og-twitter-card.jpg?v=5" />
 <meta name="twitter:image:alt" content="Agent Keyboard prompt bar editing a live app" />
 
@@ -109,8 +109,15 @@ a:hover{ color:var(--amber); }
   border:1px solid var(--rule-2); border-radius:999px; padding:6px 12px;
   white-space:nowrap;
 }
-.gh-pill svg{ width:16px; height:16px; flex:none; }
 .gh-pill:hover{ color:var(--amber); border-color:rgba(255,184,107,.4); }
+/* account: GitHub avatar (initial underneath if it fails) → a small menu */
+.acct-menu{ position:relative; }
+.acct-menu summary{ list-style:none; position:relative; width:32px; height:32px; border-radius:50%; overflow:hidden; cursor:pointer; display:grid; place-items:center; background:var(--bg-2); border:1px solid var(--rule-2); color:var(--ink-2); font-weight:600; font-size:14px; }
+.acct-menu summary::-webkit-details-marker{ display:none; }
+.acct-menu summary:focus-visible{ outline:2px solid rgba(255,184,107,.5); outline-offset:2px; }
+.acct-menu img{ position:absolute; inset:0; width:100%; height:100%; object-fit:cover; }
+.acct-menu > div{ position:absolute; right:0; top:42px; z-index:10; display:flex; flex-direction:column; gap:8px; white-space:nowrap; background:var(--bg-2); border:1px solid var(--rule-2); border-radius:12px; padding:12px 16px; font-size:14px; color:var(--ink-3); }
+.acct-menu button{ border:0; background:none; padding:0; text-align:left; font:inherit; color:var(--ink); cursor:pointer; } .acct-menu a{ color:var(--ink); text-decoration:none; } .acct-menu a, .acct-menu button{ display:flex; align-items:center; gap:10px; } .acct-menu svg{ color:var(--ink-3); flex:none; } .acct-menu button:hover, .acct-menu a:hover{ color:var(--amber); }
 
 /* ---- hero ---- */
 .hero{ padding:72px 0 0; text-align:center; }
@@ -137,6 +144,7 @@ h1 .mode::after{ content:""; display:inline-block; width:.06em; height:.9em; mar
 .lede code{ font-family:var(--mono); font-size:.86em; color:var(--warm); }
 
 /* ---- cta row ---- */
+.claude-cta{ margin:16px 0 0; font-size:14px; } .claude-cta a{ color:var(--ink-3); } .claude-cta a:hover{ color:var(--amber); }
 .cta-row{ display:flex; flex-wrap:wrap; justify-content:center; gap:12px; margin:28px auto 0; }
 .btn{
   display:inline-flex; align-items:center; gap:9px;
@@ -150,24 +158,10 @@ h1 .mode::after{ content:""; display:inline-block; width:.06em; height:.9em; mar
 .btn.primary:hover{ background:#ffc88a; border-color:#ffc88a; box-shadow:0 6px 26px rgba(255,184,107,.28); }
 .btn.ghost:hover{ color:var(--warm); border-color:var(--rule-2); }
 
-/* ---- install line ---- */
-.install{
-  max-width:760px; margin:0 auto; display:flex; align-items:center; gap:12px;
-  background:var(--bg-2); border:1px solid var(--rule-2); border-radius:14px;
-  padding:14px 16px;
-}
-.install code{ flex:1; min-width:0; overflow-x:auto; scrollbar-width:none;
-  font-family:var(--mono); font-size:13px; color:var(--warm); white-space:nowrap; }
-.install code::-webkit-scrollbar{ display:none; }
+/* ---- install note ---- */
 .install-note{ margin:12px auto 0; text-align:center; font-size:12.5px; color:var(--ink-3); }
 .install-note a{ color:var(--ink-2); }
 .install-note code{ font-family:var(--mono); font-size:.95em; color:var(--ink-2); }
-.k{ color:var(--violet); } .a{ color:var(--amber); } .s{ color:var(--ok); } .c{ color:var(--ink-3); }
-.copybtn{
-  margin-left:auto; flex:none; font-size:12px; font-weight:500; cursor:pointer;
-  color:var(--ink-2); background:transparent; border:1px solid var(--rule-2); border-radius:8px; padding:5px 9px;
-}
-.copybtn:hover{ color:var(--amber); border-color:rgba(255,184,107,.4); }
 
 /* ---- corner callout ---- */
 
@@ -291,8 +285,7 @@ footer .meta a:hover{ color:var(--amber); }
 
 @media (max-width:720px){
   .grid{ grid-template-columns:1fr; }
-  .top{ justify-content:center; }
-  .top .brand{ display:none; }
+  .top:not(.signed-in) .top-right{ display:none; } /* phones: the brand always stays; Sign in drops (Get started covers it), the account menu shows once signed in */
   section{ padding:44px 0; }
   .asks{ grid-template-columns:1fr; }
 }
@@ -321,10 +314,7 @@ footer .meta a:hover{ color:var(--amber); }
   <div class="top">
     <div class="brand"><img class="mark" src="typewriter-mark.png" width="41" height="22" alt=""><b>Agent Keyboard</b></div>
     <div class="top-right">
-      <a class="gh-pill" href="https://github.com/vibhasjain/agent-keyboard">
-        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-        vibhasjain/agent-keyboard
-      </a>
+      <a class="gh-pill" id="acct" href="/signin">Sign in</a>
     </div>
   </div>
 
@@ -338,12 +328,52 @@ footer .meta a:hover{ color:var(--amber); }
       a real Claude Code session edits the repo and ships it while you watch.</p>
 
     <div class="cta-row">
-      <button class="btn primary demo-cta" type="button"><span aria-hidden="true">✻</span>Demo</button>
-      <a class="btn ghost" href="https://github.com/vibhasjain/agent-keyboard">
-        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"></path></svg>
-        GitHub
-      </a>
+      <a class="btn primary" id="start-cta" href="/dashboard">Get started</a>
+      <button class="btn ghost demo-cta" type="button"><span aria-hidden="true">✻</span>Take the tour</button>
     </div>
+    <p class="claude-cta"><a id="claude-cta" href="https://claude.ai/customize/connectors?modal=add-custom-connector&amp;connectorName=Agent%20Keyboard&amp;connectorUrl=https%3A%2F%2Fagentkeyboard.com%2Fmcp" target="_blank" rel="noopener">or get started in Claude →</a></p>
+    <script>
+      // Signed in with Claude already connected (the dashboard's check): a new Claude chat instead of the connector dialog.
+      // Checked again whenever the server pushes a change for this user (signed out: no stream).
+      {
+      let rev, events;
+      const claudeCheck = () => fetch('/cloud/me').then(r => r.json()).then(me => {
+        // server push straight from the control plane (signed URL from /cloud/me; Netlify's proxy would buffer it)
+        if (me.events && !events) {
+          (events = new EventSource(me.events)).onmessage = e => { if (rev && e.data !== rev) claudeCheck(); rev = e.data; };
+          // refused (the 24 h link expired, or the server was mid-deploy): get a fresh link and reconnect
+          events.onerror = () => { if (events.readyState === EventSource.CLOSED) { events = null; setTimeout(claudeCheck, 5000); } };
+        }
+        if (!me.signedIn) return;
+        // signed in: their GitHub avatar opens "Signed in as … / Your sites / Add a site / Sign out" (as on the dashboard), "Your sites" instead of Get started, no Demo (they have the bar already)
+        const acct = document.getElementById('acct');
+        if (acct.tagName === 'A') {
+          const menu = document.createElement('details');
+          menu.className = 'acct-menu'; menu.id = 'acct';
+          menu.innerHTML = '<summary><span aria-hidden="true"></span><img alt=""></summary><div><span></span><a href="/dashboard"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/></svg>Your sites</a><a href="/start"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>Add a site</a><button type="button"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/><path d="m16 17 5-5-5-5"/><path d="M21 12H9"/></svg>Sign out</button></div>';
+          menu.querySelector('summary').setAttribute('aria-label', 'Account: ' + me.login);
+          menu.querySelector('summary span').textContent = me.login.slice(0, 1).toUpperCase();
+          const img = menu.querySelector('img');
+          img.onerror = () => img.remove();
+          img.src = 'https://github.com/' + encodeURIComponent(me.login) + '.png?size=64';
+          menu.querySelector('div span').textContent = 'Signed in as ' + me.login;
+          if (!me.instance) menu.querySelector('a[href="/dashboard"]').remove(); // no sites yet: just Add a site
+          menu.querySelector('button').onclick = () => fetch('/cloud/logout', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(() => location.reload());
+          addEventListener('click', e => { if (!menu.contains(e.target)) menu.open = false; });
+          addEventListener('keydown', e => { if (e.key === 'Escape') menu.open = false; });
+          acct.replaceWith(menu);
+          menu.closest('.top').classList.add('signed-in');
+        }
+        document.getElementById('start-cta').textContent = 'Your sites';
+        document.querySelectorAll('.demo-cta').forEach(b => b.style.display = 'none');
+        if (!me.claude) return;
+        const a = document.getElementById('claude-cta');
+        a.textContent = 'Manage in Claude →';
+        a.href = 'https://claude.ai/new?q=' + encodeURIComponent("Let's work on my Agent Keyboard sites");
+      }).catch(() => {});
+      claudeCheck();
+      }
+    </script>
 
   </header>
 </div>
@@ -365,11 +395,7 @@ footer .meta a:hover{ color:var(--amber); }
   </div>
   <p class="demo-cap">The real bar on a scripted run: ask, it edits the repo, and the page updates right where you're looking.</p>
   <div class="hero-foot">
-    <div class="install">
-      <code><span class="a">&lt;script</span> <span class="k">src</span>=<span class="s">"https://agent-keyboard.fly.dev/widget.js"</span> <span class="k">data-site</span>=<span class="s">"halo"</span> <span class="k">defer</span><span class="a">&gt;&lt;/script&gt;</span></code>
-      <button class="copybtn" data-copy="&lt;script src=&quot;https://agent-keyboard.fly.dev/widget.js&quot; data-site=&quot;halo&quot; defer&gt;&lt;/script&gt;">copy</button>
-    </div>
-    <p class="install-note">Self-hosted: <a href="/setup">Claude Code sets it up with you</a>, even from an empty repo. Open source · MIT.</p>
+    <p class="install-note"><a href="/start">Get your own in about 5 minutes</a>, all in the browser, even if you don't have a site yet. It runs on a Sprite in your own Fly account (about $1/month, covered by Fly's free plan) with your own Claude plan, and hosts your site on Cloudflare Pages' free plan. Open source · MIT.</p>
   </div>
 </div>
 
@@ -400,25 +426,23 @@ footer .meta a:hover{ color:var(--amber); }
         <span class="arch-chip">dictate</span>
         <span class="arch-chip">photo</span>
       </div>
-      <p class="arch-note">You sign in once through <b>Supabase</b> and prompt the bar right on your app.</p>
+      <p class="arch-note">You sign in once with your email and prompt the bar right on your app.</p>
 
       <div class="arch-link" aria-hidden="true"><i></i><span class="arch-link-label">prompt</span></div>
 
       <!-- the one shared server -->
       <div class="arch-core">
-        <div class="arch-core-title"><em class="think">✻</em> One Fly server</div>
-        <div class="arch-core-sub">A single Claude&nbsp;Code CLI with <b>a durable session per site</b> — it remembers your past changes and picks up right where you left off.</div>
+        <div class="arch-core-title"><em class="think">✻</em> A Sprite in your Fly account</div>
+        <div class="arch-core-sub">One per site, running Claude&nbsp;Code on your own Claude plan with <b>a durable session</b> — it remembers your past changes and picks up right where you left off.</div>
       </div>
 
       <div class="arch-link" aria-hidden="true"><i></i><span class="arch-link-label">commit&nbsp;+&nbsp;push</span></div>
 
       <!-- one server, many repos -->
       <div class="arch-row">
-        <span class="arch-repo">blog.git</span>
-        <span class="arch-repo">shop.git</span>
-        <span class="arch-repo">docs.git</span>
+        <span class="arch-repo">your-site.git</span>
       </div>
-      <p class="arch-note">One push to <b>every repo you connect</b> — your host redeploys.</p>
+      <p class="arch-note">A GitHub Action deploys it to <b>Cloudflare Pages</b>, with a preview link for every sandbox.</p>
 
       <div class="arch-link" aria-hidden="true"><i></i><span class="arch-link-label">deploys</span></div>
 
@@ -489,8 +513,8 @@ footer .meta a:hover{ color:var(--amber); }
     <div class="faq">
       <details class="qa">
         <summary><h3>Is it a browser extension?</h3></summary>
-        <p>No — there's nothing to install in your browser. It's a single <code>&lt;script&gt;</code> tag you
-          add to your app's own code, like an analytics snippet. The bar then appears right inside your running
+        <p>No — there's nothing to install in your browser. It's a single <code>&lt;script&gt;</code> tag in your app's
+          own code, like an analytics snippet, and setup adds it for you. The bar then appears right inside your running
           site once you're signed in. No extension, no separate app.</p>
       </details>
       <details class="qa">
@@ -501,9 +525,10 @@ footer .meta a:hover{ color:var(--amber); }
       </details>
       <details class="qa">
         <summary><h3>How long does setup take?</h3></summary>
-        <p>About an hour, mostly waiting on builds. You run your own server on Fly.io, with Supabase for
-          sign-in and a GitHub token to push. Clone the repo and run <code>claude</code> in it: the bundled
-          setup skill walks you through each step and checks it works. The script tag is the last step.</p>
+        <p>About 5 minutes, all in the browser at <a href="/start">agentkeyboard.com/start</a>: sign in with GitHub,
+          connect Cloudflare (your site's hosting), confirm a code on Fly.io and sign in to Claude. It runs in your own
+          accounts on your own Claude plan, and we add the script tag for you. Prefer Claude? Add our MCP server,
+          <code>agentkeyboard.com/mcp</code>, and Claude walks you through the same steps.</p>
       </details>
       <details class="qa">
         <summary><h3>Can I keep my existing workflow?</h3></summary>
@@ -515,14 +540,14 @@ footer .meta a:hover{ color:var(--amber); }
       </details>
       <details class="qa">
         <summary><h3>Is it safe to point an agent at my codebase?</h3></summary>
-        <p>It only touches repos you allow-list, and every commit is authored by the person who asked for it.
+        <p>It only touches the repo you picked at setup, through the GitHub access you granted, and every commit is authored by the person who asked for it.
           Want to review before it goes live? Ask for a sandbox: a private preview you can click around in,
           published only when you say so. And you can always ask it to roll a change back.</p>
       </details>
       <details class="qa">
         <summary><h3>What does it cost to run?</h3></summary>
-        <p>Mostly things you already pay for: the Claude Code subscription edits, Supabase's free tier
-          does auth, a small Fly VM (often free) hosts. The OpenAI key is optional, for voice.</p>
+        <p>Mostly your Claude plan, which does the editing. The agent runs on a Sprite in your own Fly account
+          (about $1/month, covered by Fly's free plan), and your site is hosted on Cloudflare Pages' free plan.</p>
       </details>
     </div>
   </div>
@@ -574,17 +599,6 @@ footer .meta a:hover{ color:var(--amber); }
     if (now - lastTouchEnd < 350 && !interactive) e.preventDefault();
     lastTouchEnd = now;
   }, { passive: false });
-
-  document.querySelectorAll('.copybtn').forEach(function(btn){
-    btn.addEventListener('click', function(){
-      var text = btn.getAttribute('data-copy');
-      navigator.clipboard.writeText(text).then(function(){
-        var prev = btn.textContent;
-        btn.textContent = 'copied';
-        setTimeout(function(){ btn.textContent = prev; }, 1400);
-      }).catch(function(){});
-    });
-  });
 
   document.querySelectorAll('.demo-cta').forEach(function(btn){
     btn.addEventListener('click', function(){
