@@ -48,6 +48,7 @@ import {
 import { rotationReason, shortHandoff, turnWatchdog } from "./session-policy.js";
 import { sessionFilePath, readConversation, readSessionUsage } from "./conversation.js";
 import { toolLabel } from "./tool-label.js";
+import { mcpOAuthConfig, mcpOAuthNote } from "./mcpauth.js";
 import { readFile } from "node:fs/promises";
 
 // NaN-guarded env int: a malformed value must not become setTimeout(fn, NaN)
@@ -302,7 +303,8 @@ function scopeNote(site: Site, pushBranch: string = site.branch, sandboxMode: st
       (alwaysSandbox
         ? `This site requires review: build every change in a sandbox — a private copy with its own preview URL — without asking, and never commit or push to "${site.branch}" here yourself.`
         : `For a bigger change (e.g. the request quotes a #note), or when asked, offer to build it in a sandbox first — a private copy with its own preview URL — as the options "Build in a sandbox" / "Just do it live".`) +
-        ` To create one, run \`curl -sS --max-time 600 -X POST http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${site.id}/sandboxes -H "x-ak-internal: $AK_INTERNAL_SECRET" -H "Content-Type: application/json" -d '{"name":"<2-4 word name>","page":"<path you were sent from>","sender":"<requester email>","task":"<the full task, self-contained>"}'\`. Give that Bash call a 10-minute timeout: it waits until the preview is live, then a fork of this conversation starts the task there, and the user is taken there when your turn ends — so don't do the task here; just say it's on its way. To archive one without publishing (only its creator or an owner may), find its name with \`curl -sS http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${site.id}/sandboxes -H "x-ak-internal: $AK_INTERNAL_SECRET"\`, then run \`curl -sS -X POST http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${site.id}--sb-<name>/archive -H "x-ak-internal: $AK_INTERNAL_SECRET" -H "Content-Type: application/json" -d '{"sender":"<requester email>"}'\` (its branch is deleted; its notes are kept on live).`,
+        ` To create one, run \`curl -sS --max-time 600 -X POST http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${site.id}/sandboxes -H "x-ak-internal: $AK_INTERNAL_SECRET" -H "Content-Type: application/json" -d '{"name":"<2-4 word name>","page":"<path you were sent from>","sender":"<requester email>","task":"<the full task, self-contained>"}'\`. Give that Bash call a 10-minute timeout: it waits until the preview is live, then a fork of this conversation starts the task there, and the user is taken there when your turn ends — so don't do the task here; just say it's on its way. To archive one without publishing (only its creator or an owner may), find its name with \`curl -sS http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${site.id}/sandboxes -H "x-ak-internal: $AK_INTERNAL_SECRET"\`, then run \`curl -sS -X POST http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${site.id}--sb-<name>/archive -H "x-ak-internal: $AK_INTERNAL_SECRET" -H "Content-Type: application/json" -d '{"sender":"<requester email>"}'\` (its branch is deleted; its notes are kept on live).` +
+        ` To ask one of this site's sandbox agents something (or hand it a change), run \`curl -sS -N --max-time 20 -X POST http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${site.id}--sb-<name>/messages -H "x-ak-internal: $AK_INTERNAL_SECRET" -H "Content-Type: application/json" -d '{"text":"[from the live agent] <message>","page":"/","sender":"<requester email>"}'\` (the first SSE frame, \`event: job\`, carries its job_id; curl then stops with exit 28, which is expected, and the job keeps running), then poll \`curl -sS http://127.0.0.1:${process.env.PORT ?? 8080}/jobs/<job_id> -H "x-ak-internal: $AK_INTERNAL_SECRET"\` every 15 s until \`result.reply\` is set; GET \`/sites/${site.id}--sb-<name>/conversation?limit=20\` (same header) shows its history. Never resend because a reply is slow.`,
     );
   }
   if (alwaysSandbox) {
@@ -397,7 +399,12 @@ function streamArgs(
   streaming: boolean,
   cron = false,
   mcp = false,
+  teammate = false,
 ): string[] {
+  // Spec 22: MCP servers the owner signed in to (through the local proxy); not for teammates or guest sites.
+  const key = site.sandboxOf?.id ?? site.id;
+  const oauth = !teammate && !site.guest;
+  const oauthMcp = oauth ? mcpOAuthConfig(key, site.id) : null;
   return [
     ...(resume ? ["--resume", sessionId] : ["--session-id", sessionId]),
     // A sandbox's first turn forks the live conversation it was created from.
@@ -419,11 +426,11 @@ function streamArgs(
     // load user-level settings/skills: ~/.claude/skills on the volume holds the
     // seeded skills (server/skills/) plus anything the agent installs itself.
     "--strict-mcp-config",
-    ...(mcp ? ["--mcp-config", AK_MCP] : []),
+    ...(mcp || oauthMcp ? ["--mcp-config", ...(mcp ? [AK_MCP] : []), ...(oauthMcp ? [oauthMcp] : [])] : []),
     "--setting-sources",
     "user,project",
     "--append-system-prompt",
-    scopeNote(site, pushBranch, harness.settings.sandbox) + " " + harnessNote(site.id, harness, usage),
+    scopeNote(site, pushBranch, harness.settings.sandbox) + (oauth ? mcpOAuthNote(key, site.id) : "") + " " + harnessNote(site.id, harness, usage),
   ];
 }
 
@@ -934,7 +941,7 @@ export async function* runMessageJob(
       const subagents = makeSubagentTracker();
 
       const { child: c, done } = spawnClaude(
-        streamArgs(prompt, sessionId, resume, site, pushBranch, harness, lastUsage, STREAMING_INPUT, opts.cron, mcpFor(opts.sender, opts.cron)),
+        streamArgs(prompt, sessionId, resume, site, pushBranch, harness, lastUsage, STREAMING_INPUT, opts.cron, mcpFor(opts.sender, opts.cron), isTeammate(opts.sender)),
         dir,
         (e) => {
           if (stopReason) return;
@@ -1308,7 +1315,7 @@ export async function* runStreamingSession(
     const checklist = makeTaskChecklist();
     const subagents = makeSubagentTracker();
     const spawned = spawnClaude(
-      streamArgs(prompt, sessionId, resume, site, pushBranch, harness, lastUsage, true, opts.cron, mcpFor(opts.sender, opts.cron)),
+      streamArgs(prompt, sessionId, resume, site, pushBranch, harness, lastUsage, true, opts.cron, mcpFor(opts.sender, opts.cron), isTeammate(opts.sender)),
       dir,
       (e) => {
         if (stopReason) return;

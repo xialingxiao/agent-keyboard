@@ -32,7 +32,7 @@ import {
   isOwnerEmail,
 } from "./auth.js";
 import { ASSET_TYPES, registerFeedRoutes } from "./feed.js";
-import { getSite, listSitesPublic, pageSlugFor, SITES } from "./sites.js";
+import { getSite, listSitesPublic, pageSlugFor, SITES, type Site } from "./sites.js";
 import { archiveSandbox, closedReason, createSandbox, getSandbox, listSandboxes, pruneSandboxes, publishSandbox, sandboxForOrigin, setSandboxRedirect, waitForPreview } from "./sandboxes.js";
 import { buildPrompt, mcpFor, isTeammate, runMessageJob, runStreamingSession, InputChannel, STREAMING_SESSION, killAllChildren, rotateConversation, conversationIdFor, sessionIdFor, sessionFileExists, compactSession } from "./claude.js";
 import { acquireSiteLock, checkoutPath, commitFile, removeCheckout, ensureCheckout, resetCheckoutToOrigin, startCheckoutPruning, tryAcquireSiteLock } from "./checkouts.js";
@@ -44,6 +44,7 @@ import { startJobsCron } from "./cron.js";
 import { mintRealtimeToken } from "./realtime.js";
 import { browserTasksRouter, closeAllBrowserTasks } from "./browser.js";
 import { ringRouter } from "./ring.js";
+import { disconnect, listServers, mcpAuthEnabled, mcpAuthRouter, startSignIn, validName } from "./mcpauth.js";
 import { runChecks, setupRouter } from "./setup.js";
 import { keepTranscripts, seedCodexConfig, seedSkills } from "./skills.js";
 import {
@@ -70,6 +71,7 @@ import {
   type JobRow,
 } from "./jobstore.js";
 import { openSse, startKeepalive, writeFrame } from "./sse.js";
+import { readEvents, setOnHookDisabled, setWebhook } from "./events.js";
 import { startBrowserDetection, streamScreen, withBrowserStatus } from "./screen.js";
 
 const SERVER_DIR = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -599,6 +601,7 @@ app.post("/sites/:siteId/messages", authed, async (req, res) => {
   const internal = authedUser(req)?.id === "internal";
   const sender = internal && typeof (body as { sender?: unknown }).sender === "string" ? String((body as { sender?: unknown }).sender) : authedUser(req)?.email;
   if (sender) lastSender.set(site.id, sender);
+  if (!internal) publicOrigin = `${/^(localhost|127\.)/.test(req.get("host") ?? "") ? "http" : "https"}://${req.get("host")}`;
   const cron = internal && body.cron === true;
   const freshCron = cron && body.freshCron === true;
   const forceFresh = freshCron ? "fresh cron" : internal && body.forceFresh === true ? "boot requeue" : undefined;
@@ -627,6 +630,7 @@ app.post("/sites/:siteId/messages", authed, async (req, res) => {
     conversationId,
     sessionId,
     resumeCount: 0,
+    sender: cron ? "cron" : sender,
   });
   await streamJobTail(req, res, job);
 });
@@ -678,6 +682,41 @@ app.post("/sites/:siteId/sandboxes", authed, async (req, res) => {
 });
 
 /** A live site's open sandboxes, for the bar's switcher (empty inside a sandbox). */
+/** The site's events after `after` (Notes spec 21); `wait` (0–50 s) long-polls for the next one.
+ *  Owners, the internal secret and the Cloud relay only: events carry asks and replies. */
+function eventsSite(req: Request, res: Response) {
+  const site = getSite(req.params.siteId ?? "");
+  if (!site) {
+    res.status(404).json({ error: "unknown site" });
+    return null;
+  }
+  if (denySite(req, res, site.id)) return null;
+  const user = authedUser(req);
+  if (!user || !(user.id === "internal" || user.id === "relay" || isOwnerEmail(user.email))) {
+    res.status(403).json({ error: "only the site's owner can use its events and webhooks" });
+    return null;
+  }
+  return site;
+}
+app.get("/sites/:siteId/events", authed, async (req, res) => {
+  const site = eventsSite(req, res);
+  if (!site) return;
+  const wait = Math.max(0, Math.min(50, Number(req.query.wait) || 0));
+  res.json(await readEvents(site.id, String(req.query.after ?? ""), wait));
+});
+/** Add or remove one webhook (`{url, events?, remove?}`); a new hook's secret is returned once. */
+app.post("/sites/:siteId/webhooks", authed, async (req, res) => {
+  const site = eventsSite(req, res);
+  if (!site) return;
+  const { url, events, remove } = (req.body ?? {}) as { url?: unknown; events?: unknown; remove?: unknown };
+  if (typeof url !== "string" || !url) {
+    res.status(400).json({ error: "url required" });
+    return;
+  }
+  const out = await setWebhook(site.id, url, Array.isArray(events) && events.length ? events.map(String) : ["*"], remove === true);
+  res.status(out.error ? 400 : 200).json(out);
+});
+
 app.get("/sites/:siteId/sandboxes", authed, async (req, res) => {
   const site = getSite(req.params.siteId ?? "");
   if (!site) {
@@ -696,6 +735,56 @@ app.get("/sites/:siteId/sandboxes", authed, async (req, res) => {
 // Who sent each site's latest message, so publishing knows who tapped
 // "Publish to live" without trusting the agent to say.
 const lastSender = new Map<string, string>();
+// The origin the bar talks to this server on (the redirect URI for MCP sign-ins when AK_PUBLIC_URL is unset).
+let publicOrigin = "";
+
+/**
+ * Spec 22: the agent connects, lists and disconnects OAuth MCP servers for the
+ * owner (internal secret; the site's latest message must be an owner's). The
+ * owner opens the returned signInUrl; /oauth/callback (mcpauth.ts) finishes it.
+ */
+function mcpOwner(req: Request, res: Response): { key: string; site: Site } | null {
+  const site = getSite(req.params.siteId ?? "");
+  if (!site) return void res.status(404).json({ error: "unknown site" }), null;
+  if (denySite(req, res, site.id)) return null;
+  const user = authedUser(req);
+  const by = user?.id === "internal" ? lastSender.get(site.id) : user?.email;
+  if (!mcpAuthEnabled || site.guest) return void res.status(400).json({ error: "MCP sign-in needs AK_INTERNAL_SECRET and a non-guest site" }), null;
+  if (!by || !isOwnerEmail(by)) return void res.status(403).json({ error: "only the site owner can connect or disconnect MCP servers" }), null;
+  return { key: site.sandboxOf?.id ?? site.id, site };
+}
+app.get("/sites/:siteId/mcp-servers", authed, (req, res) => {
+  const o = mcpOwner(req, res);
+  if (o) res.json({ servers: listServers(o.key) });
+});
+app.post("/sites/:siteId/mcp-servers", authed, async (req, res) => {
+  const o = mcpOwner(req, res);
+  if (!o) return;
+  const { url, name, page, client_id, client_secret } = (req.body ?? {}) as Record<string, unknown>;
+  const origin = (process.env.AK_PUBLIC_URL || publicOrigin).replace(/\/$/, "");
+  if (typeof url !== "string" || (name !== undefined && (typeof name !== "string" || !validName(name)))) {
+    res.status(400).json({ error: "url (https) required; name, if given, is lowercase letters, digits and dashes" });
+    return;
+  }
+  if (!origin) {
+    res.status(409).json({ error: "this server doesn't know its public URL yet: set AK_PUBLIC_URL, or send a message from the bar first" });
+    return;
+  }
+  const path = typeof page === "string" && page.startsWith("/") && !page.startsWith("//") ? page : "/";
+  try {
+    res.json(await startSignIn({
+      siteKey: o.key, siteId: o.site.id, url, name: name as string | undefined, origin, back: `https://${o.site.domain}${path}`,
+      clientId: typeof client_id === "string" && client_id ? client_id : undefined,
+      clientSecret: typeof client_secret === "string" && client_secret ? client_secret : undefined,
+    }));
+  } catch (e) {
+    res.status(400).json({ error: (e as Error).message });
+  }
+});
+app.delete("/sites/:siteId/mcp-servers/:name", authed, (req, res) => {
+  const o = mcpOwner(req, res);
+  if (o) res.json({ removed: disconnect(o.key, req.params.name ?? "") });
+});
 
 /**
  * Publish a sandbox to live (its agent calls this, with the internal secret,
@@ -787,7 +876,7 @@ app.post("/sites/:siteId/archive", authed, async (req, res) => {
     res.status(403).json({ error: `only the sandbox's creator (${sb.createdBy ?? "unknown"}) or the site owner can archive it` });
     return;
   }
-  await archiveSandbox(site);
+  await archiveSandbox(site, by);
   void acquireSiteLock(site.id).then((release) => removeCheckout(site.id).catch(() => {}).finally(release));
   res.json({ archived: sb.id });
 });
@@ -1028,6 +1117,7 @@ app.post("/sites/:siteId/jobs/:jobId/messages", authed, async (req, res) => {
   const ok = appendToJob(
     req.params.jobId ?? "",
     buildPrompt(site, { text: text + notesNote(site.id, text) + pathScopeNote(user, site.id), page: "/", attachmentPaths, sender: user?.email }),
+    { ask: text, sender: user?.email },
   );
   if (!ok) {
     res.status(409).json({ error: "job not accepting messages" });
@@ -1494,6 +1584,7 @@ app.post("/realtime/token", authed, async (_req, res) => {
 
 // Ring webhook + focus registry (see ring.ts).
 app.use(ringRouter());
+app.use(mcpAuthRouter());
 
 // GET /check: the instance's self-test (see setup.ts). Public, no secrets in it.
 app.use(setupRouter());
@@ -1533,6 +1624,16 @@ const httpServer = app.listen(port, () => {
     ).catch((e) => console.error("[sandbox] prune failed", e));
   sandboxPrune();
   setInterval(sandboxPrune, 6 * 3_600_000).unref();
+  setOnHookDisabled(async (siteId, url) =>
+    addTeamNote(siteId, await conversationIdFor(siteId, ""), {
+      id: randomUUID(),
+      role: "user",
+      text: `The webhook ${url} failed 20 times in a row, so it was turned off ("disabled": true in settings). Remove that key to turn it back on.`,
+      tools: [],
+      ts: new Date().toISOString(),
+      sender: "Agent Keyboard",
+    }).catch(() => {}),
+  );
   // Purge stale staged uploads, then reconcile any jobs the last process left
   // "running" (machine slept / crashed mid-job). Both tolerate an unreachable
   // Supabase / missing checkouts — log and continue, never block serving.
