@@ -273,6 +273,12 @@ export function resolvePushBranch(site: Site): string {
   return site.pushBranch.replace(/\{ts\}/g, timestampSlug());
 }
 
+// Hosted instances (the control plane sets AK_FEEDBACK_KEY) can send Agent Keyboard bug reports (spec 23).
+function feedbackNote(siteId: string): string {
+  if (!process.env.AK_FEEDBACK_KEY) return "";
+  return ` Only when the user explicitly asks to report something to Agent Keyboard (the team that runs this service), draft a short bug report, show it, and ask with the options "Send it" / "Don't send"; after "Send it", run \`curl -sS -X POST http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${siteId}/feedback -H "x-ak-internal: $AK_INTERNAL_SECRET" -H "Content-Type: application/json" -d @- <<'EOF'\` with the JSON \`{"title":"<one line>","body":"<the report>","page":"<path you were sent from>","sender":"<requester email>"}\` (add \`"note":"<name>"\` to attach a note the user named) and tell them its id. Never send one unasked, and never include secrets, tokens, env values or anything the user didn't approve.`;
+}
+
 // ~6-line operating scope — the ONLY server-authored prompt text. Everything
 // else (how to make the change) is the agent's own judgment + the repo's files.
 // When pushBranch differs from the deploy branch, the push clause redirects the
@@ -326,6 +332,7 @@ function scopeNote(site: Site, pushBranch: string = site.branch, sandboxMode: st
     `Your replies render in a small chat panel with simple markdown: short paragraphs, "-" bullet lists, numbered lists, **bold**, \`inline code\`, [links](https://example.com), short fenced code blocks, and small headings all work; tables do not render, so never use them. Keep replies concise — a couple of sentences, or a short list when structure helps.`,
     `When you need the user to pick between a few discrete options, or to confirm an irreversible action (like clearing context), present the choices as a fenced code block whose info string is \`options\`, one option per line. The panel turns each line into a tappable button that sends that exact line back as the user's next message — so word each option as the message you want to receive (e.g. "Yes, clear the context"). Use it only for genuine pick-one or confirm moments, never for ordinary lists.`,
     `To show the user an image in the chat, save it (PNG/JPG/GIF/WebP) into the ${path}/.tmp/outputs/ folder — create the folder if needed; anything you leave there is displayed to the user alongside your reply. You can curl an image URL into that folder.`,
+    `If the requester asks you to email a teammate a note they already left with an @mention (they forgot to tick "Email them"), find its id and page in GET http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${site.id}/conversation?limit=50 (header x-ak-internal: $AK_INTERNAL_SECRET; their note has "to" and "sender" set), then POST http://127.0.0.1:${process.env.PORT ?? 8080}/sites/${site.id}/teamnotes with that header and the JSON {"noteId":"<id>","page":"<that page>","sender":"<requester email>"}; it emails the note's recipients as them (only their own notes).`,
     `If this site embeds the Agent Keyboard widget (a <script src=".../widget.js" data-site=…> tag) and you create a new page, copy that same embed onto the new page so the bar appears there too — unless the site uses a shared layout/template that already includes it.`,
   );
   return lines.join(" ");
@@ -430,7 +437,7 @@ function streamArgs(
     "--setting-sources",
     "user,project",
     "--append-system-prompt",
-    scopeNote(site, pushBranch, harness.settings.sandbox) + (oauth ? mcpOAuthNote(key, site.id) : "") + " " + harnessNote(site.id, harness, usage),
+    scopeNote(site, pushBranch, harness.settings.sandbox) + (oauth ? mcpOAuthNote(key, site.id) : "") + feedbackNote(site.id) + " " + harnessNote(site.id, harness, usage),
   ];
 }
 

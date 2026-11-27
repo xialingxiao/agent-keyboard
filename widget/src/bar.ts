@@ -918,6 +918,9 @@ export function mountBar(shadow: ShadowRoot): void {
       setpwLabel.textContent = inv?.email ? `Welcome — set a password for ${inv.email}` : 'Welcome — set a password'
     }
 
+    // Bars on one page take turns: announce opening, and minimize when another bar opens (listener below).
+    if (view === 'expanded' && lastView !== 'expanded') window.dispatchEvent(new CustomEvent('agentbar:open', { detail: { id: 'agentkeyboard' } }))
+
     placeFooter(view)
     // Leaving the transcript does NOT stop the mic: the owner minimizes to browse the
     // site while still talking; "over and out" sends, or re-open and tap stop. The
@@ -925,6 +928,47 @@ export function mountBar(shadow: ShadowRoot): void {
 
     lastView = view
   }
+
+  window.addEventListener('agentbar:open', (e) => {
+    if ((e as CustomEvent).detail?.id !== 'agentkeyboard' && getState().ui.mode === 'expanded') collapseToCorner()
+  })
+  // Another bar docked its panel to the right: park the corner box beside it (chat.ts fires ours).
+  window.addEventListener('agentbar:dock', (e) => {
+    const d = (e as CustomEvent).detail
+    if (d?.id === 'agentkeyboard') return
+    const w = Number(d?.width)
+    host.style.setProperty('--ak-aside', w > 0 ? `${w}px` : '0px')
+  })
+  // agentbar.md rule 4: corner boxes stack in load order. Bars that answer our hello
+  // loaded earlier and we rise above each one's showing box; bars whose hello comes
+  // later stack above us. 0 = our box is hidden (transcript open, summon, signed out).
+  const earlier = new Map<string, number>()
+  const later = new Set<string>()
+  const boxHeight = () => Math.round(Math.max(miniBtn.getBoundingClientRect().height, bar.getBoundingClientRect().height))
+  let sentHeight = -1
+  const firePill = () => {
+    sentHeight = boxHeight()
+    window.dispatchEvent(new CustomEvent('agentbar:pill', { detail: { id: 'agentkeyboard', height: sentHeight } }))
+  }
+  window.addEventListener('agentbar:hello', (e) => {
+    const id = (e as CustomEvent).detail?.id
+    if (!id || id === 'agentkeyboard') return
+    if (!earlier.has(id)) later.add(id)
+    firePill()
+  })
+  window.addEventListener('agentbar:pill', (e) => {
+    const d = (e as CustomEvent).detail
+    if (!d?.id || d.id === 'agentkeyboard' || later.has(d.id)) return
+    earlier.set(d.id, Math.max(0, Number(d.height) || 0))
+    const below = [...earlier.values()].reduce((sum, h) => (h > 0 ? sum + h + 12 : sum), 0)
+    host.style.setProperty('--ak-below', `${below}px`)
+  })
+  const ro = new ResizeObserver(() => {
+    if (boxHeight() !== sentHeight) firePill()
+  })
+  ro.observe(miniBtn)
+  ro.observe(bar)
+  window.dispatchEvent(new CustomEvent('agentbar:hello', { detail: { id: 'agentkeyboard' } }))
 
   const unsub = subscribe(render)
   void unsub // retained for the lifetime of the page

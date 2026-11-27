@@ -9,6 +9,7 @@ import { api, HttpError, SIGNED_OUT, type ConversationMessage, type Conversation
 import { hasStoredSession } from './auth'
 import { CONFIG, lsKey } from './config'
 import { uuid } from './dom'
+import { showWhenLive } from './liveswap'
 import { getState, patchUi, type LineState, type Subagent, type TodoItem, setJob } from './state'
 
 const BACKOFF = [1000, 2000, 5000, 10000]
@@ -570,6 +571,13 @@ function onTurnComplete(data: Record<string, unknown>): void {
     // it idle so the bar shows the plain composer, not a spinner+timer "working" pill.
     idle: pendingUserTexts.length === 0,
   })
+  // A streaming session's turns end here, not in finishDone: swap the page in once a shipped turn is live
+  // (not when the turn redirects to a sandbox or back to live).
+  const git = (data.git ?? {}) as GitInfo
+  if (git.changed && git.pushed && typeof data.sandbox_url !== 'string') void showWhenLive(git.files, () => {
+    const j = getState().job
+    if (j.phase === 'streaming' && j.idle) setStreaming({ line: 'live — page updated', lineState: 'dim', idle: true })
+  })
 }
 
 // The streaming session closed (idle / lifetime cap / stop). Turns already landed
@@ -626,7 +634,7 @@ function finishDone(data: Record<string, unknown>): void {
   // "pushed" only when the agent actually changed something; pushed=true alone
   // just means the checkout matches origin (e.g. a read-only question).
   const shipped = !!git.changed && !!git.pushed
-  const summary = shipped && sha7 ? `pushed ${sha7} — refresh to see it` : oneLine(reply) || 'Done'
+  const summary = shipped && sha7 ? `pushed ${sha7} — the page updates when it's live` : oneLine(reply) || 'Done'
   const finishedId = jobId
   markHandled(jobId!)
   clearPersist()
@@ -648,6 +656,16 @@ function finishDone(data: Record<string, unknown>): void {
     const j = getState().job
     if (j.phase === 'done' && j.jobId === finishedId) setJob({ phase: 'idle' })
   }, DONE_LINGER_MS)
+  if (shipped && typeof data.sandbox_url !== 'string') void showWhenLive(git.files, () => {
+    const j = getState().job
+    if (j.phase !== 'idle' && !(j.phase === 'done' && j.jobId === finishedId)) return // a newer job owns the pill
+    setJob({ phase: 'done', jobId: finishedId!, summary: 'live — page updated', ok: true })
+    if (doneTimer != null) clearTimeout(doneTimer)
+    doneTimer = setTimeout(() => {
+      const k = getState().job
+      if (k.phase === 'done' && k.jobId === finishedId) setJob({ phase: 'idle' })
+    }, DONE_LINGER_MS)
+  })
   dispatchQueue()
 }
 
