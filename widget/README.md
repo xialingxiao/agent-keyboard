@@ -139,7 +139,8 @@ Over one job's stream you'll see:
   the pill reads "live — page updated"; up to 4 min, then nothing. Swaps wait while a field on the page is focused. The
   page is **never reloaded**: when a `<script>` or own script file changed, the `<body>` changed shape, or a changed
   element no longer matches the snapshot (the page's JS redrew it), the pill reads "live — refresh to see it" and stays
-  until the next job. **Any other file** (JS, images, code the page loads): the same ask once a change is seen, or
+  until the next job. A new image (its file name isn't in the old page or its stylesheets) counts as swappable too.
+  **Any other file** (JS, changed images, code the page loads): the same ask once a change is seen, or
   after 90 s if none is. A changed same-origin iframe is reloaded on its own.
 
 Any site pipeline that launches Playwright can opt into the live view with the port the server injects

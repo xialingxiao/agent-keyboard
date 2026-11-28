@@ -61,7 +61,9 @@ export async function showWhenLive(files: string[] | undefined, updated: (line: 
   const key = (s: Snap) => s.html + JSON.stringify(s.css) + JSON.stringify(s.frames)
   // Refresh for anything the page loads that can't be swapped. Not for HTML/CSS/docs, dotfiles (.github…), or server
   // code (Cloudflare/Netlify functions, server/, api/, host config): if that renders this page, its HTML changes and is seen.
-  const swappable = !files || files.every((f) => /\.(html?|css|md|txt)$/i.test(f) || /(^|\/)\./.test(f) ||
+  // An image the old page never used (a new one) can't be stale on screen, so it swaps in with the HTML that shows it.
+  const unseen = (f: string) => /\.(png|jpe?g|gif|webp|avif|svg|ico)$/i.test(f) && !key(from).includes(f.split('/').pop()!)
+  const swappable = !files || files.every((f) => /\.(html?|css|md|txt)$/i.test(f) || /(^|\/)\./.test(f) || unseen(f) ||
     /(^|\/)(functions|server|api|backend|workers?|supabase|migrations)\/|(^|\/)(Dockerfile|(fly|wrangler|netlify|vercel)\.(toml|json))$/i.test(f))
   let last: string | null = null
   for (const end = Date.now() + (swappable ? POLL_FOR_MS : REFRESH_AFTER_MS); Date.now() < end && me === watching; ) {
