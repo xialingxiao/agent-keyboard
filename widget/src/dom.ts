@@ -40,7 +40,7 @@ export function clear(n: HTMLElement): void {
 
 // Inline stroke icons (lucide-style, currentColor) — emoji render with
 // platform-dependent glyph metrics and broke the bar's vertical rhythm.
-const ICON_PATHS: Record<string, string> = {
+export const ICON_PATHS: Record<string, string> = {
   camera:
     '<path d="M14.5 4h-5L7.4 6.4 4 7v13h16V7l-3.4-.6L14.5 4z" fill="none"/><circle cx="12" cy="13" r="3.4" fill="none"/>',
   note: '<path d="M14 3H6a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V9z" fill="none"/><path d="M14 3v6h6M8 13h8M8 17h5" fill="none"/>',

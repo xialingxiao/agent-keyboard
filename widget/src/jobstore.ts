@@ -63,7 +63,7 @@ let lastStatusSignature = ''
 // frame ends the session. pendingUserTexts pairs each turn's reply with the user
 // text (and attachments) that produced it (FIFO): head = the turn being processed now.
 let sessionStreaming = false
-type PendingTurn = { text: string; thumbs?: string[]; files?: string[] }
+type PendingTurn = { text: string; thumbs?: string[]; files?: string[]; attachmentIds?: string[] }
 let pendingUserTexts: PendingTurn[] = []
 
 // Turns completed during this page load (rendered under any server-fetched history).
@@ -679,11 +679,16 @@ function finishError(data: Record<string, unknown>): void {
   // Infrastructural terminals (server restart mid-session, evicted job) aren't the
   // agent's fault and self-recover — keep them pill-only, never a persistent row.
   const transient = kind === 'interrupted' || kind === 'not_found'
+  // A restart (a deploy, a Sprite's auto-update) cut the job off: the messages it never answered go back
+  // to the front of the queue, so they're sent again now that the server is back instead of vanishing.
+  const lost: QueuedInput[] = transient
+    ? pendingUserTexts.filter((t) => t.text.trim() || t.attachmentIds?.length).map((t) => ({ ...t, page: lastPage, idemKey: uuid() }))
+    : []
   const partial = currentFullText()
-  if (prompt || activeThumbs?.length || activeFiles?.length) {
+  if (!lost.length && (prompt || activeThumbs?.length || activeFiles?.length)) {
     liveTurns.push({ role: 'user', text: prompt, thumbs: activeThumbs, files: activeFiles })
   }
-  if (partial) liveTurns.push({ role: 'assistant', text: partial })
+  if (partial && !lost.length) liveTurns.push({ role: 'assistant', text: partial })
   if (!transient && (!partial || !sameTerminalText(partial, detail))) liveTurns.push({ role: 'error', text: detail })
   markHandled(jobId ?? '')
   clearPersist()
@@ -692,6 +697,8 @@ function finishError(data: Record<string, unknown>): void {
   // reload would be surprising. The error pill opens the transcript instead.
   outboxRemove(activeIdemKey)
   reset()
+  queue.unshift(...lost)
+  for (const q of lost) outboxUpsert({ idemKey: q.idemKey!, text: q.text, page: q.page, attachmentIds: q.attachmentIds, ts: Date.now() })
   setJob({ phase: 'error', message: detail })
   dispatchQueue()
 }
@@ -891,7 +898,7 @@ export function start(input: {
     // Live streaming session → inject the follow-up into the running job rather
     // than queuing a fresh one.
     if (sessionStreaming && jobId && (input.text.trim() || input.attachmentIds?.length)) {
-      const t: PendingTurn = { text: input.text, thumbs: input.thumbs?.length ? input.thumbs : undefined, files: input.files?.length ? input.files : undefined }
+      const t: PendingTurn = { text: input.text, thumbs: input.thumbs?.length ? input.thumbs : undefined, files: input.files?.length ? input.files : undefined, attachmentIds: input.attachmentIds }
       pendingUserTexts.push(t)
       const js = getState().job
       if (js.phase === 'streaming') setJob({ ...js, idle: false }) // resting → working immediately
@@ -937,7 +944,7 @@ export function start(input: {
   terminal = false
   jobFinished = false
   attempt = 0
-  pendingUserTexts = [{ text: input.text }] // first turn; shifted off when its result lands (streaming only)
+  pendingUserTexts = [{ text: input.text, thumbs: activeThumbs, files: activeFiles, attachmentIds: input.attachmentIds }] // first turn; shifted off when its result lands (streaming only)
   setJob({ phase: 'sending', startedAt })
 
   // Persist the in-flight send BEFORE the POST: a reload in the POST→job-frame

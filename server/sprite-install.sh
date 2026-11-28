@@ -40,6 +40,12 @@ cd "$HOME/agent-keyboard/server" && exec npx tsx src/index.ts
 EOF
 chmod +x "$HOME/ak-run.sh"
 
+# Restarting kills a running turn (and any message sent meanwhile): wait up to 5 min for the agent
+# to go idle. Still busy → leave the old server running; AK_BUSY tells the control plane to retry.
+busy() { { for f in /proc/[0-9]*/cmdline; do tr '\0' ' ' <"$f"; echo; done; true; } 2>/dev/null | grep 'output-forma[t] stream-json' >/dev/null; } # not -q: its early exit fails the pipe under pipefail
+for _ in $(seq 60); do busy || break; sleep 5; done
+if busy; then echo AK_BUSY; exit 0; fi
+
 sprite-env services delete ak >/dev/null 2>&1 || true
 sprite-env services create ak --cmd "$HOME/ak-run.sh" --http-port 8080 >/dev/null
 

@@ -112,6 +112,53 @@ const mermaidPreview = $prose(
     }),
 )
 
+// A copy button in each code block's top-right corner (a zero-height widget just
+// before the block, so the block's text stays exactly what's in the note).
+const codeCopy = $prose(
+  () =>
+    new Plugin({
+      props: {
+        decorations: (state) => {
+          const decos: Decoration[] = []
+          state.doc.descendants((node, pos) => {
+            if (node.type.name === 'code_block')
+              decos.push(
+                Decoration.widget(
+                  pos,
+                  (view, getPos) => {
+                    const box = h('div', 'akn-codecopy')
+                    box.contentEditable = 'false'
+                    const btn = h('button', 'akn-codecopy-btn')
+                    btn.type = 'button'
+                    btn.title = 'Copy'
+                    btn.setAttribute('aria-label', 'Copy code')
+                    btn.append(icon('copy', 14))
+                    btn.onmousedown = (e) => e.preventDefault()
+                    btn.onclick = () => {
+                      const at = getPos()
+                      const text = at == null ? '' : (view.state.doc.nodeAt(at)?.textContent ?? '')
+                      navigator.clipboard.writeText(text).then(
+                        () => {
+                          btn.replaceChildren(icon('check', 14))
+                          setTimeout(() => btn.replaceChildren(icon('copy', 14)), 1500)
+                        },
+                        () => {},
+                      )
+                    }
+                    box.append(btn)
+                    return box
+                  },
+                  { key: 'codecopy', side: 1, ignoreSelection: true, stopEvent: () => true },
+                ),
+              )
+            return node.type.name !== 'code_block'
+          })
+          return DecorationSet.create(state.doc, decos)
+        },
+      },
+    }),
+)
+
 // Backspace on an empty list line: a nested one outdents (like Shift-Tab, which
 // phones don't have); otherwise the line is deleted and the caret goes to the end
 // of the line above, instead of leaving a bullet-less line inside the item above
@@ -844,7 +891,7 @@ export async function open(opts: NotesOptions): Promise<void> {
       .addFeature(placeholder, { text: 'Describe the change — type / for blocks' })
     // `-` bullets (remark's default is `*`), so a note round-trips the way people write it.
     crepe.editor.config((ctx) => ctx.update(remarkStringifyOptionsCtx, (o) => ({ ...o, bullet: '-' as const })))
-    crepe.editor.use(linkRule).use(outdentEmpty).use(listIndent(root)).use(mentions()).use(mermaidPreview)
+    crepe.editor.use(linkRule).use(outdentEmpty).use(listIndent(root)).use(mentions()).use(mermaidPreview).use(codeCopy)
     crepe.on((l) =>
       l.markdownUpdated((_ctx, md) => {
         markdown = unescapeMentions(md)

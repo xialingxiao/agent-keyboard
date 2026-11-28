@@ -538,6 +538,9 @@ button::-moz-focus-inner{ border:0; }
 .ak-t .ak-t-body code{ font-size:12px; background:var(--ak-bg2); padding:1px 5px; border-radius:4px; }
 .ak-t .ak-t-body pre{ background:var(--ak-bg2); border:1px solid var(--ak-rule); border-radius:6px; padding:10px 12px; overflow-x:auto; margin:0 0 8px; }
 .ak-t .ak-t-body pre code{ background:none; padding:0; }
+.ak-t .ak-t-body pre{ position:relative; }
+.ak-copy-code{ position:absolute; top:4px; right:4px; display:grid; place-items:center; width:26px; height:26px; padding:0; border:1px solid var(--ak-rule); border-radius:5px; background:var(--ak-bg2); color:var(--ak-ink3); cursor:pointer; opacity:.75; }
+.ak-copy-code:hover, .ak-copy-code:focus-visible{ opacity:1; color:var(--ak-ink); }
 .ak-t .ak-t-body a{ color:var(--ak-accent); text-decoration:underline; text-underline-offset:2px; overflow-wrap:anywhere; }
 .ak-t .ak-t-body a:hover{ color:var(--ak-accent); }
 /* @handle mention: the agent's identity color as text, tint + hairline from the same hex */
