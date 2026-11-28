@@ -3,15 +3,16 @@
 // polled until the deploy lands (new HTML, the same on two polls in a row, so a
 // page that differs per request never triggers). Only the smallest changed
 // elements are replaced in place (head styles and <title> synced, scroll kept).
-// Anything a swap can't do safely reloads instead (the bar's draft and open
-// transcript survive it): the turn touched files other than HTML/CSS/docs (JS,
+// The page itself is never reloaded: anything a swap can't do safely asks the user
+// to refresh instead: the turn touched files other than HTML/CSS/docs (JS,
 // images, code), a script changed, or the live element no longer matches the
 // snapshot because the page's own JS redrew it (e.g. an SPA root).
 import { getState, subscribe } from './state'
 
 const POLL_MS = 5000
 const POLL_FOR_MS = 4 * 60_000
-const RELOAD_AFTER_MS = 90_000 // a reload-only change nothing here can see land (an image): about one deploy
+const REFRESH_AFTER_MS = 90_000 // a refresh-only change nothing here can see land (an image): about one deploy
+const SWAPPED = 'live — page updated', REFRESH = 'live — refresh to see it'
 
 type Snap = { html: string; css: Record<string, string>; frames: Record<string, string> } // css: own stylesheet and script files by URL; frames: same-origin iframes' HTML
 let base: Snap | null = null
@@ -22,7 +23,7 @@ const get = (url: string): Promise<string> =>
   fetch(url, { cache: 'no-store', credentials: 'same-origin' }).then((r) => (r.ok ? r.text() : Promise.reject(new Error(String(r.status)))))
 // The page as served, plus its own stylesheet files: a change to an unhashed styles.css leaves the HTML as it was.
 const sheetLinks = () => [...document.querySelectorAll<HTMLLinkElement>('link[rel~="stylesheet"]')].filter((l) => new URL(l.href, location.href).origin === location.origin)
-// The page's own script files: running JS can't be swapped (it would run twice), so a change there reloads.
+// The page's own script files: running JS can't be swapped (it would run twice), so a change there needs a refresh.
 const ownScripts = () => [...document.scripts].map((x) => x.src).filter((u) => u && new URL(u).origin === location.origin)
 // Same-origin iframes (e.g. a framed demo page): a change there leaves the top page's HTML as it was.
 const frames = () => [...document.querySelectorAll('iframe')].flatMap((f) => {
@@ -50,29 +51,29 @@ export function initLiveSwap(): void {
   })
 }
 
-/** After a shipped result: wait for the deploy, then swap (or reload). `updated` runs after a swap. `files` (the
- *  turn's changed paths) beyond HTML/CSS/docs mean a reload. If a swappable change never shows, nothing happens. */
-export async function showWhenLive(files: string[] | undefined, updated: () => void): Promise<void> {
+/** After a shipped result: wait for the deploy, then swap it in, or tell `updated` to ask for a manual refresh.
+ *  `files` (the turn's changed paths) beyond HTML/CSS/docs mean a refresh. If a swappable change never shows, nothing happens. */
+export async function showWhenLive(files: string[] | undefined, updated: (line: string) => void): Promise<void> {
   const me = ++watching
   await taking
   const from = base
   if (from == null) return
   const key = (s: Snap) => s.html + JSON.stringify(s.css) + JSON.stringify(s.frames)
-  // Reload for anything the page loads that can't be swapped. Not for HTML/CSS/docs, dotfiles (.github…), or server
+  // Refresh for anything the page loads that can't be swapped. Not for HTML/CSS/docs, dotfiles (.github…), or server
   // code (Cloudflare/Netlify functions, server/, api/, host config): if that renders this page, its HTML changes and is seen.
   const swappable = !files || files.every((f) => /\.(html?|css|md|txt)$/i.test(f) || /(^|\/)\./.test(f) ||
     /(^|\/)(functions|server|api|backend|workers?|supabase|migrations)\/|(^|\/)(Dockerfile|(fly|wrangler|netlify|vercel)\.(toml|json))$/i.test(f))
   let last: string | null = null
-  for (const end = Date.now() + (swappable ? POLL_FOR_MS : RELOAD_AFTER_MS); Date.now() < end && me === watching; ) {
+  for (const end = Date.now() + (swappable ? POLL_FOR_MS : REFRESH_AFTER_MS); Date.now() < end && me === watching; ) {
     await new Promise((r) => setTimeout(r, POLL_MS))
     const now = await snap().catch(() => null)
     if (now == null || key(now) === key(from)) { last = null; continue }
     if (key(now) !== last) { last = key(now); continue } // wait for it to hold steady
     if (editingPage()) continue // never pull the page out from under someone typing in it
     base = now
-    if (!swappable) return location.reload()
-    if (ownScripts().some((u) => from.css[u] != null && now.css[u] !== from.css[u])) return location.reload()
-    if (now.html !== from.html && !swap(from.html, now.html)) return location.reload()
+    if (!swappable) return updated(REFRESH)
+    if (ownScripts().some((u) => from.css[u] != null && now.css[u] !== from.css[u])) return updated(REFRESH)
+    if (now.html !== from.html && !swap(from.html, now.html)) return updated(REFRESH)
     // A changed stylesheet file: load a fresh copy beside the old one, then drop the old (no unstyled flash).
     for (const l of sheetLinks()) {
       const href = unbust(l.href)
@@ -84,10 +85,9 @@ export async function showWhenLive(files: string[] | undefined, updated: () => v
     }
     // A changed framed page: reload just that frame.
     for (const [u, f] of frames()) if (from.frames[u] != null && now.frames[u] !== from.frames[u]) f.contentWindow?.location.reload()
-    return updated()
+    return updated(SWAPPED)
   }
-  while (!swappable && me === watching && editingPage()) await new Promise((r) => setTimeout(r, POLL_MS))
-  if (!swappable && me === watching) location.reload()
+  if (!swappable && me === watching) updated(REFRESH)
 }
 
 function editingPage(): boolean {
@@ -100,7 +100,7 @@ function editingPage(): boolean {
   return !!a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))
 }
 
-/** Patch the live document from the old → new HTML. False = can't safely; reload. */
+/** Patch the live document from the old → new HTML. False = can't safely; ask for a refresh. */
 function swap(fromHtml: string, toHtml: string): boolean {
   const p = new DOMParser()
   const a = p.parseFromString(fromHtml, 'text/html'), b = p.parseFromString(toHtml, 'text/html')
@@ -115,7 +115,7 @@ function swap(fromHtml: string, toHtml: string): boolean {
       [...x.attributes].every((t) => y.getAttribute(t.name) === t.value) && x.attributes.length === y.attributes.length &&
       [...x.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join() === [...y.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent).join()
     if (sameShell) return [...x.children].every((c, i) => walk(c, y.children[i], [...path, i]))
-    if (!path.length) return false // the <body> itself changed shape: reload
+    if (!path.length) return false // the <body> itself changed shape: refresh
     const l = live(path)
     // The live element must still be what the old HTML served (an app's JS hasn't redrawn it).
     if (!l || l.tagName !== x.tagName || l.textContent !== x.textContent) return false

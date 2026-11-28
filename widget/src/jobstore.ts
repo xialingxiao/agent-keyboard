@@ -577,9 +577,9 @@ function onTurnComplete(data: Record<string, unknown>): void {
   // A streaming session's turns end here, not in finishDone: swap the page in once a shipped turn is live
   // (not when the turn redirects to a sandbox or back to live).
   const git = (data.git ?? {}) as GitInfo
-  if (git.changed && git.pushed && typeof data.sandbox_url !== 'string') void showWhenLive(git.files, () => {
+  if (git.changed && git.pushed && typeof data.sandbox_url !== 'string') void showWhenLive(git.files, (line) => {
     const j = getState().job
-    if (j.phase === 'streaming' && j.idle) setStreaming({ line: 'live — page updated', lineState: 'dim', idle: true })
+    if (j.phase === 'streaming' && j.idle) setStreaming({ line, lineState: 'dim', idle: true })
   })
 }
 
@@ -659,11 +659,12 @@ function finishDone(data: Record<string, unknown>): void {
     const j = getState().job
     if (j.phase === 'done' && j.jobId === finishedId) setJob({ phase: 'idle' })
   }, DONE_LINGER_MS)
-  if (shipped && typeof data.sandbox_url !== 'string') void showWhenLive(git.files, () => {
+  if (shipped && typeof data.sandbox_url !== 'string') void showWhenLive(git.files, (line) => {
     const j = getState().job
     if (j.phase !== 'idle' && !(j.phase === 'done' && j.jobId === finishedId)) return // a newer job owns the pill
-    setJob({ phase: 'done', jobId: finishedId!, summary: 'live — page updated', ok: true })
+    setJob({ phase: 'done', jobId: finishedId!, summary: line, ok: true })
     if (doneTimer != null) clearTimeout(doneTimer)
+    if (line !== 'live — page updated') return // the refresh ask stays until the next job
     doneTimer = setTimeout(() => {
       const k = getState().job
       if (k.phase === 'done' && k.jobId === finishedId) setJob({ phase: 'idle' })
