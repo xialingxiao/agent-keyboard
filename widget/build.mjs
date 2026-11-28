@@ -64,7 +64,8 @@ async function bundle(entry, outfile, gzipBudgetKB, extra = {}) {
 // 39.25: yield the corner box to another bar's full-screen sheet; re-announce our dock on hello (agentbar.md rules 1 and 4, 2026-11-28).
 // 39.4: the live swap also watches same-origin iframes and reloads just the changed frame (fb_fb04f2750583, 2026-11-28).
 // 41.1: the corner typewriter at 3x (78x42, 64 colours) so it's crisp on phones (~1.4 KB, 2026-11-28).
-await bundle('src/index.ts', 'dist/widget.js', 41.1)
+// 41.2: a copy button on chat code blocks (~0.05 KB, 2026-11-28).
+await bundle('src/index.ts', 'dist/widget.js', 41.2)
 await bundle('src/demo/index.ts', 'dist/demo.js', 45)
 
 // The notes editor (Milkdown Crepe), lazy-loaded by the widget only when Notes

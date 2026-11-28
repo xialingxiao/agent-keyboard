@@ -1015,6 +1015,18 @@ export function mountChat(shadow: ShadowRoot, deps: ChatDeps): Chat {
     if ((e.target as HTMLElement)?.closest?.('.ak-opt')) e.preventDefault()
   })
   on(listEl, 'click', (e) => {
+    const copy = (e.target as HTMLElement)?.closest?.('.ak-copy-code') as HTMLButtonElement | null
+    if (copy) {
+      const code = copy.parentElement?.querySelector('code')?.textContent ?? ''
+      navigator.clipboard.writeText(code).then(
+        () => {
+          copy.replaceChildren(icon('check', 14))
+          setTimeout(() => copy.replaceChildren(icon('copy', 14)), 1500)
+        },
+        () => {},
+      )
+      return
+    }
     const btn = (e.target as HTMLElement)?.closest?.('.ak-opt') as HTMLButtonElement | null
     if (!btn || btn.disabled) return
     const text = (btn.dataset.send || btn.textContent || '').trim()

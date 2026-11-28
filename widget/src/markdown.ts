@@ -4,6 +4,10 @@
 // fit for a phone-width transcript.)
 
 import { AGENT_TAGS } from './config'
+import { ICON_PATHS } from './dom'
+
+// Corner copy button on code blocks; chat.ts's delegated click copies the block.
+const COPY_CODE = `<button type="button" class="ak-copy-code" aria-label="Copy code" title="Copy"><svg viewBox="0 0 24 24" width="14" height="14" stroke="currentColor" stroke-width="1.8" aria-hidden="true">${ICON_PATHS.copy}</svg></button>`
 
 function escape(s: string): string {
   return s
@@ -126,7 +130,7 @@ export function renderMarkdown(src: string): string {
           continue
         }
       }
-      out.push(`<pre><code>${body.join('\n')}</code></pre>`)
+      out.push(`<pre>${COPY_CODE}<code>${body.join('\n')}</code></pre>`)
       continue
     }
 
