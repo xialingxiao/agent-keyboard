@@ -91,8 +91,13 @@ export async function showWhenLive(files: string[] | undefined, updated: () => v
 }
 
 function editingPage(): boolean {
-  const a = document.activeElement as HTMLElement | null
-  return !!a && a.id !== 'agent-keyboard-host' && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))
+  let a = document.activeElement as HTMLElement | null
+  // Inside our own bar, only a half-typed message counts: after a send the empty composer keeps focus.
+  if (a?.id === 'agent-keyboard-host') {
+    a = a.shadowRoot?.activeElement as HTMLElement | null
+    return !!a && (a.isContentEditable || (/^(INPUT|TEXTAREA)$/.test(a.tagName) && !!(a as HTMLInputElement).value.trim()))
+  }
+  return !!a && (a.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName))
 }
 
 /** Patch the live document from the old → new HTML. False = can't safely; reload. */
